@@ -1,1 +1,14 @@
-./data/raw/es_ckan_pessoal/remuneracoes-12_2025.csv
+.DS_Store
+.venv/
+back/.venv/
+__pycache__/
+*.pyc
+
+front/node_modules/
+front/dist/
+front/.env
+
+back/.env
+back/artifacts/*.json
+back/data/*.db
+back/data/raw/
