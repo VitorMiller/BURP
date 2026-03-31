@@ -515,7 +515,11 @@ def _dedup_key(record: dict[str, Any]) -> tuple[Any, ...]:
         detalhes = record.get("detalhes_json")
         raw = detalhes.get("raw") if isinstance(detalhes, dict) else None
         raw_key = json.dumps(raw, ensure_ascii=True, sort_keys=True) if isinstance(raw, dict) else None
-        return base + (raw_key,)
+        # FAPES rows can be reingested with a better monthly competence later on.
+        # When the raw row is the same, we keep only one logical receipt in reports.
+        if raw_key:
+            return (source_id, raw_key)
+        return base
     return base
 
 

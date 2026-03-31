@@ -298,6 +298,14 @@ def _record_identity_payload(record: dict[str, Any]) -> dict[str, Any]:
         raw_key = json.dumps(raw, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
     elif raw is not None:
         raw_key = str(raw).strip() or None
+    if record.get("source_id") == "fapes_bolsas" and raw_key:
+        # FAPES rows may be reingested later with better parsed metadata
+        # such as monthly competence or payment date. The raw row is the
+        # stable identity and should collapse those legacy copies.
+        return {
+            "source_id": record.get("source_id"),
+            "raw_key": raw_key,
+        }
     return {
         "source_id": record.get("source_id"),
         "person_name_norm": record.get("person_name_norm"),

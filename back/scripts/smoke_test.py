@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 
 import burp.api.app as api_app_module
 from burp.api.app import app
+from burp.connectors.fapes import _select_xlsx_resources
 from burp.connectors.sources import list_sources_meta
 from burp.connectors.base import IngestResult
 from burp.normalization.name import normalize_name
@@ -114,7 +115,62 @@ def _fixture_records() -> list[dict[str, object]]:
     ]
 
 
+def _assert_fapes_resource_selection() -> None:
+    resources = [
+        {"name": "FAPES Bolsas 2023.xlsx", "url": "https://example.test/fapes-2023.xlsx"},
+        {"name": "FAPES Bolsas 2024.xlsx", "url": "https://example.test/fapes-2024.xlsx"},
+        {"name": "FAPES Bolsas 2025.xlsx", "url": "https://example.test/fapes-2025.xlsx"},
+        {"name": "FAPES Bolsas 2026.xlsx", "url": "https://example.test/fapes-2026.xlsx"},
+    ]
+    selected = _select_xlsx_resources(resources)
+    selected_names = [item["name"] for item in selected]
+    if selected_names != [
+        "FAPES Bolsas 2024.xlsx",
+        "FAPES Bolsas 2025.xlsx",
+        "FAPES Bolsas 2026.xlsx",
+    ]:
+        raise AssertionError(f"FAPES should ingest 2024+ resources, got: {selected_names}")
+
+
+def _assert_fapes_report_dedup() -> None:
+    record_base = {
+        "source_id": "fapes_bolsas",
+        "person_name_original": "MARIA DE TESTE",
+        "person_name_norm": normalize_name("MARIA DE TESTE"),
+        "person_hint_id": None,
+        "uf": "ES",
+        "municipio": None,
+        "orgao": "FAPES",
+        "tipo_recebimento": "BOLSA",
+        "valor_bruto": 1234.56,
+        "descontos": None,
+        "valor_liquido": 1234.56,
+        "cargo_funcao": "PESQUISA",
+        "source_url": "fixture://fapes/2025",
+        "collected_at": now_utc_iso(),
+        "parser_version": "smoke-test",
+        "detalhes_json": {
+            "raw": {
+                "nome": "MARIA DE TESTE",
+                "programa": "PESQUISA",
+                "valor": "1234,56",
+                "data de credito": "2025-01-14 00:00:00",
+            }
+        },
+    }
+    deduped = api_app_module._dedup_records(
+        [
+            {**record_base, "competencia": "2025", "data_pagamento": None, "cargo_funcao": None},
+            {**record_base, "competencia": "2025-01", "data_pagamento": "2025-01-14", "cargo_funcao": "PESQUISA"},
+        ]
+    )
+    if len(deduped) != 1:
+        raise AssertionError("FAPES yearly and monthly versions of the same raw row should dedupe in reports")
+
+
 def main() -> None:
+    _assert_fapes_resource_selection()
+    _assert_fapes_report_dedup()
     init_db()
     ensure_sources([meta.__dict__ for meta in list_sources_meta()])
     insert_records(_fixture_records())
