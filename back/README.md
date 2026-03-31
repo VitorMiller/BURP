@@ -1,6 +1,6 @@
 # BURP ES Backend
 
-Backend em FastAPI + SQLite para ingestão e consulta de recebimentos públicos no recorte do Espírito Santo.
+Backend em FastAPI + SQLite para ingestão e consulta de salários do Portal da Transparência federal e bolsas FAPES/FACTO no recorte do Espírito Santo.
 
 ## Setup
 
@@ -37,25 +37,25 @@ curl "http://localhost:8000/search?nome=JOSE%20DA%20SILVA&uf=ES&tipo=todos&data_
 
 O retorno inclui `period_report`, com:
 
-- soma mensal de `FOLHA`, `BOLSA` e `DIARIA`
+- soma mensal de `FOLHA` e `BOLSA`
 - meses acima do teto de referência
 - totais por fonte e por tipo
 - cobertura do intervalo analisado
 
 ## Atualização explícita das fontes
 
-Busca agora é somente leitura por padrão. Para atualizar FAPES/FACTO sob demanda:
+Busca agora é somente leitura por padrão. Para atualizar Portal federal, FAPES e FACTO sob demanda:
 
 ```bash
 curl -X POST http://localhost:8000/refresh/query \
   -H "Content-Type: application/json" \
-  -d '{"nome":"JOSE DA SILVA","data_inicio":"2025-01-01","data_fim":"2025-12-31","include_fapes":true,"include_facto":true,"include_federal":false}'
+  -d '{"nome":"JOSE DA SILVA","data_inicio":"2025-01-01","data_fim":"2025-12-31","include_fapes":true,"include_facto":true,"include_federal":true}'
 ```
 
 ## CLI
 
 ```bash
-python -m burp ingest --target ckan
+python -m burp ingest --target federal
 python -m burp search --nome "JOSE DA SILVA" --uf ES --tipo todos --data-inicio 2025-01-01 --data-fim 2025-12-31
 python -m burp sources
 ```

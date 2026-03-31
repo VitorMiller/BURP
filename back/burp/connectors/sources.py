@@ -4,25 +4,17 @@ from burp.connectors.base import SourceMeta
 from burp.settings import get_settings
 
 
+def active_source_ids() -> list[str]:
+    return [meta.source_id for meta in list_sources_meta()]
+
+
 def list_sources_meta() -> list[SourceMeta]:
     settings = get_settings()
     return [
         SourceMeta(
-            source_id="vitoria_pessoal",
-            name="Vitoria - TransparenciaWeb (Pessoal)",
-            base_url=settings.vitoria_base_url,
-            tipo="FOLHA",
-        ),
-        SourceMeta(
-            source_id="vilavelha_pessoal",
-            name="Vila Velha - TransparenciaWeb (Pessoal)",
-            base_url=settings.vilavelha_base_url,
-            tipo="FOLHA",
-        ),
-        SourceMeta(
-            source_id="es_ckan_pessoal",
-            name="ES CKAN - Portal da Transparencia (Pessoal)",
-            base_url=settings.ckan_base_url,
+            source_id="portal_federal_remuneracao",
+            name="Portal da Transparencia Federal - Servidores (Remuneracao)",
+            base_url=settings.federal_base_url,
             tipo="FOLHA",
         ),
         SourceMeta(
@@ -35,18 +27,6 @@ def list_sources_meta() -> list[SourceMeta]:
             source_id="facto_conveniar",
             name="FACTO - Conveniar (Pessoas Fisicas e Servidores)",
             base_url=settings.facto_base_url,
-            tipo="BOLSA",
-        ),
-        SourceMeta(
-            source_id="portal_federal_remuneracao",
-            name="Portal da Transparencia Federal - Servidores (Remuneracao)",
-            base_url=settings.federal_base_url,
-            tipo="FOLHA",
-        ),
-        SourceMeta(
-            source_id="portal_federal_favorecido",
-            name="Portal da Transparencia Federal - Favorecido (Despesas)",
-            base_url=settings.federal_portal_base_url,
             tipo="BOLSA",
         ),
     ]

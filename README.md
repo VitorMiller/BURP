@@ -1,6 +1,6 @@
 # BURP ES
 
-Aplicação focada no recorte do Espírito Santo para cruzar folha, bolsas e diárias, com ETL em Python no `back/` e uma interface React no `front/`.
+Aplicação focada no recorte do Espírito Santo para cruzar salários do Portal da Transparência federal com bolsas FAPES e FACTO, com ETL em Python no `back/` e uma interface React no `front/`.
 
 ## Estrutura
 
@@ -32,4 +32,4 @@ Por padrão o frontend fala com `http://localhost:8000`. Se precisar mudar, conf
 1. Ingestão para formato canônico `records`.
 2. Persistência idempotente em SQLite.
 3. Busca por nome com agrupamento conservador.
-4. Relatório mensal por período, somando `FOLHA + BOLSA + DIARIA` e marcando meses acima do teto de referência.
+4. Relatório mensal por período, somando `FOLHA + BOLSA` e marcando meses acima do teto de referência.

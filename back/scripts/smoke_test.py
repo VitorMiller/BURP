@@ -17,8 +17,10 @@ os.environ["BURP_DB_PATH"] = str(TEMP_PATH / "data" / "burp-smoke.db")
 
 from fastapi.testclient import TestClient
 
+import burp.api.app as api_app_module
 from burp.api.app import app
 from burp.connectors.sources import list_sources_meta
+from burp.connectors.base import IngestResult
 from burp.normalization.name import normalize_name
 from burp.storage import ensure_sources, init_db, insert_records
 from burp.utils import now_utc_iso
@@ -39,18 +41,24 @@ def _fixture_records() -> list[dict[str, object]]:
     return [
         {
             **common,
-            "source_id": "vitoria_pessoal",
+            "source_id": "portal_federal_remuneracao",
             "raw_id": None,
-            "orgao": "PREFEITURA DE VITORIA",
+            "orgao": "Instituto Federal do Espírito Santo",
             "tipo_recebimento": "FOLHA",
             "competencia": "2025-01",
-            "data_pagamento": "2025-01-31",
-            "valor_bruto": 42000.0,
-            "descontos": 2000.0,
-            "valor_liquido": 40000.0,
-            "cargo_funcao": "SERVIDORA",
-            "detalhes_json": {"raw": {"competencia": "2025-01", "rubrica": "SALARIO BASE"}},
-            "source_url": "fixture://vitoria/2025-01",
+            "data_pagamento": None,
+            "valor_bruto": 43000.0,
+            "descontos": 0.0,
+            "valor_liquido": 43000.0,
+            "cargo_funcao": "DOCENTE",
+            "detalhes_json": {
+                "servidor": {
+                    "estadoExercicio": {"sigla": "ES", "nome": "Espírito Santo"},
+                    "orgaoServidorLotacao": {"sigla": "IFES", "nome": "Instituto Federal do Espírito Santo"},
+                },
+                "remuneracao": {"mesAno": "01/2025"},
+            },
+            "source_url": "fixture://portal-federal/2025-01",
         },
         {
             **common,
@@ -69,21 +77,6 @@ def _fixture_records() -> list[dict[str, object]]:
         },
         {
             **common,
-            "source_id": "portal_federal_favorecido",
-            "raw_id": None,
-            "orgao": "TESTE DIARIA",
-            "tipo_recebimento": "BOLSA",
-            "competencia": None,
-            "data_pagamento": "2025-01-20",
-            "valor_bruto": 3000.0,
-            "descontos": None,
-            "valor_liquido": 3000.0,
-            "cargo_funcao": None,
-            "detalhes_json": {"raw": {"elemento": "14 - Diárias - Civil"}},
-            "source_url": "fixture://diaria/2025-01",
-        },
-        {
-            **common,
             "source_id": "facto_conveniar",
             "raw_id": None,
             "orgao": "FACTO",
@@ -99,18 +92,24 @@ def _fixture_records() -> list[dict[str, object]]:
         },
         {
             **common,
-            "source_id": "vitoria_pessoal",
+            "source_id": "portal_federal_remuneracao",
             "raw_id": None,
-            "orgao": "PREFEITURA DE VITORIA",
+            "orgao": "Instituto Federal do Espírito Santo",
             "tipo_recebimento": "FOLHA",
             "competencia": "2025-02",
-            "data_pagamento": "2025-02-28",
+            "data_pagamento": None,
             "valor_bruto": 43000.0,
             "descontos": 0.0,
             "valor_liquido": 43000.0,
-            "cargo_funcao": "SERVIDORA",
-            "detalhes_json": {"raw": {"competencia": "2025-02", "rubrica": "SALARIO BASE"}},
-            "source_url": "fixture://vitoria/2025-02",
+            "cargo_funcao": "DOCENTE",
+            "detalhes_json": {
+                "servidor": {
+                    "estadoExercicio": {"sigla": "ES", "nome": "Espírito Santo"},
+                    "orgaoServidorLotacao": {"sigla": "IFES", "nome": "Instituto Federal do Espírito Santo"},
+                },
+                "remuneracao": {"mesAno": "02/2025"},
+            },
+            "source_url": "fixture://portal-federal/2025-02",
         },
     ]
 
@@ -120,9 +119,39 @@ def main() -> None:
     ensure_sources([meta.__dict__ for meta in list_sources_meta()])
     insert_records(_fixture_records())
     client = TestClient(app)
+    captured_facto_calls: list[tuple[str | None, str | None, str | None]] = []
+
+    def fake_ingest_facto(nome: str | None, start_date=None, end_date=None) -> IngestResult:
+        captured_facto_calls.append(
+            (
+                nome,
+                start_date.isoformat() if start_date else None,
+                end_date.isoformat() if end_date else None,
+            )
+        )
+        return IngestResult(
+            source_id="facto_conveniar",
+            status="ok",
+            records=0,
+            raw_files=0,
+            notes="fixture-refresh",
+        )
+
+    api_app_module.ingest_facto = fake_ingest_facto
 
     health = client.get("/health")
     sources = client.get("/sources")
+    refresh = client.post(
+        "/refresh/query",
+        json={
+            "nome": "MARIA DE TESTE",
+            "data_inicio": "2025-02-01",
+            "data_fim": "2025-02-28",
+            "include_fapes": False,
+            "include_facto": True,
+            "include_federal": False,
+        },
+    )
     search = client.get(
         "/search",
         params={
@@ -136,12 +165,17 @@ def main() -> None:
 
     health_payload = health.json()
     sources_payload = sources.json()
+    refresh_payload = refresh.json()
     search_payload = search.json()
 
     if health_payload.get("status") != "ok":
         raise AssertionError("health endpoint did not return ok")
     if not sources_payload.get("sources"):
         raise AssertionError("sources endpoint returned empty list")
+    if captured_facto_calls != [("MARIA DE TESTE", "2025-02-01", "2025-02-28")]:
+        raise AssertionError(f"FACTO refresh ignored requested period: {captured_facto_calls}")
+    if refresh_payload.get("refresh", {}).get("period") != {"start": "2025-02-01", "end": "2025-02-28"}:
+        raise AssertionError("refresh/query should echo the requested period")
     if search_payload.get("rebusca", {}).get("performed"):
         raise AssertionError("search should be read-only by default")
 
@@ -151,8 +185,12 @@ def main() -> None:
         raise AssertionError("january should exceed the configured ceiling")
     if february["estourou_teto"]:
         raise AssertionError("february should stay below the configured ceiling")
-    if january["totals_by_tipo"].get("DIARIA") != 3000.0:
-        raise AssertionError("diaria total not captured in period report")
+    if january["totals_by_tipo"].get("BOLSA") != 5000.0:
+        raise AssertionError("fapes total not captured in period report")
+    if january["totals_by_source"].get("portal_federal_remuneracao") != 43000.0:
+        raise AssertionError("portal federal salary should be included in aggregation")
+    if february["totals_by_source"].get("facto_conveniar") != 2000.0:
+        raise AssertionError("facto total not captured in period report")
 
     artifacts_dir = ROOT / "artifacts"
     artifacts_dir.mkdir(parents=True, exist_ok=True)

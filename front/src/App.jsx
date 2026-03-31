@@ -144,6 +144,7 @@ export default function App() {
 
   const summary = result?.period_report?.totals;
   const homonymRisk = result?.match_context?.homonym_risk || "N/A";
+  const shouldRefreshFederal = true;
 
   const sourceHighlights = useMemo(() => {
     if (!summary?.by_source) {
@@ -190,7 +191,7 @@ export default function App() {
           data_fim: form.dataFim || null,
           include_fapes: true,
           include_facto: true,
-          include_federal: false,
+          include_federal: shouldRefreshFederal,
         }),
       });
       setRefreshInfo(payload.refresh);
@@ -217,17 +218,17 @@ export default function App() {
         <section className="hero">
           <div>
             <span className="eyebrow">BURP ES</span>
-            <h1>Auditoria de teto com salário, bolsas e diárias no Espírito Santo.</h1>
+            <h1>Auditoria de teto com salário e bolsas no Espírito Santo.</h1>
             <p>
-              A busca consolida registros retornados pelo nome consultado e destaca, mês a mês, quando a soma de
-              FOLHA, BOLSA e DIARIA passa do teto de referência configurado no backend.
+              A busca consolida salários do Portal da Transparência federal com bolsas da FAPES e da FACTO e destaca,
+              mês a mês, quando a soma passa do teto de referência configurado no backend.
             </p>
           </div>
 
           <div className="hero-card">
             <span>Recorte operacional</span>
             <strong>Espírito Santo</strong>
-            <small>Busca local + atualização explícita de FAPES e FACTO sob demanda.</small>
+            <small>Portal da Transparência federal para salário + FAPES e FACTO para bolsas.</small>
           </div>
         </section>
 
@@ -237,7 +238,7 @@ export default function App() {
               <span className="eyebrow">Consulta</span>
               <h2>Investigar servidor</h2>
             </div>
-            <p>Use a base local para consulta normal e só acione atualização quando realmente precisar.</p>
+            <p>Use a base local para consulta normal e atualize Portal, FAPES e FACTO quando precisar trazer dados novos.</p>
           </div>
 
           <div className="form-grid">
@@ -265,7 +266,6 @@ export default function App() {
                 <option value="todos">Todos</option>
                 <option value="folha">Folha</option>
                 <option value="bolsa">Bolsa</option>
-                <option value="diaria">Diária</option>
               </select>
             </label>
 
@@ -285,9 +285,10 @@ export default function App() {
                 name="cpf"
                 value={form.cpf}
                 onChange={updateField}
-                placeholder="Opcional. Hoje o refresh padrão deixa a fonte federal desligada."
+                placeholder="Opcional. Ajuda a refinar a busca de salário no Portal da Transparência."
               />
             </label>
+
           </div>
 
           <div className="actions">
@@ -295,7 +296,7 @@ export default function App() {
               {loading ? "Consultando..." : "Consultar base local"}
             </button>
             <button className="button button--secondary" disabled={!form.nome || refreshing} onClick={refreshSources}>
-              {refreshing ? "Atualizando..." : "Atualizar FAPES + FACTO"}
+              {refreshing ? "Atualizando..." : "Atualizar Portal + FAPES + FACTO"}
             </button>
           </div>
 
@@ -333,7 +334,7 @@ export default function App() {
               <SummaryCard
                 label="Total no período"
                 value={currency(summary?.overall)}
-                helper="Soma de FOLHA, BOLSA e DIARIA consideradas no intervalo."
+                helper="Soma de salários e bolsas consideradas no intervalo."
                 tone="dark"
               />
               <SummaryCard

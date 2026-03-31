@@ -81,20 +81,43 @@ def _mes_ano_candidates(fixed: str | None) -> list[str]:
     return candidates
 
 
-def _fetch_remuneracao(
+def mes_anos_for_period(start_date: date | None, end_date: date | None, fixed: str | None = None) -> list[str]:
+    if fixed:
+        return [fixed]
+    if not start_date or not end_date:
+        return _mes_ano_candidates(fixed)
+    current_year = start_date.year
+    current_month = start_date.month
+    end_marker = (end_date.year, end_date.month)
+    mes_anos: list[str] = []
+    while (current_year, current_month) <= end_marker:
+        mes_anos.append(f"{current_year}{current_month:02d}")
+        current_month += 1
+        if current_month > 12:
+            current_month = 1
+            current_year += 1
+    return mes_anos
+
+
+def _fetch_remuneracoes(
     session: requests.Session,
     base_url: str,
     headers: dict[str, str],
     params: dict[str, Any],
     mes_anos: list[str],
     timeout: int,
-) -> tuple[requests.Response | None, str | None]:
+) -> list[tuple[requests.Response, str]]:
+    responses: list[tuple[requests.Response, str]] = []
+    seen_mes_anos: set[str] = set()
     for mes_ano in mes_anos:
+        if mes_ano in seen_mes_anos:
+            continue
+        seen_mes_anos.add(mes_ano)
         params["mesAno"] = mes_ano
         resp = session.get(f"{base_url}/servidores/remuneracao", params=params, headers=headers, timeout=timeout)
         if resp.status_code == 200:
-            return resp, mes_ano
-    return None, None
+            responses.append((resp, mes_ano))
+    return responses
 
 
 def _fetch_favorecido_resultado(
@@ -316,6 +339,33 @@ def _matches_target_name(target_norm: str | None, candidate_norm: str | None) ->
     return target_norm in candidate_norm or candidate_norm in target_norm
 
 
+def _infer_remuneracao_uf(item: dict[str, Any], orgao: Any) -> str:
+    servidor = item.get("servidor")
+    if isinstance(servidor, dict):
+        estado_exercicio = servidor.get("estadoExercicio")
+        if isinstance(estado_exercicio, dict):
+            sigla = str(estado_exercicio.get("sigla") or "").strip().upper()
+            if sigla and sigla != "-1":
+                return sigla
+            estado_nome = normalize_name(estado_exercicio.get("nome") or "")
+            if "ESPIRITO SANTO" in estado_nome:
+                return "ES"
+
+        for orgao_key in ("orgaoServidorLotacao", "orgaoServidorExercicio"):
+            orgao_info = servidor.get(orgao_key)
+            if not isinstance(orgao_info, dict):
+                continue
+            sigla = normalize_name(orgao_info.get("sigla") or "")
+            nome = normalize_name(orgao_info.get("nome") or "")
+            if sigla == "IFES" or "ESPIRITO SANTO" in nome:
+                return "ES"
+
+    orgao_norm = normalize_name(orgao or "")
+    if "ESPIRITO SANTO" in orgao_norm:
+        return "ES"
+    return "BR"
+
+
 def _fase_despesa_param(fases: list[str]) -> str:
     fases_valid = [fase.strip() for fase in fases if fase.strip()]
     return ",".join(fases_valid) if fases_valid else "3"
@@ -347,6 +397,7 @@ def _map_remuneracao_items(
             continue
         hint_id = _extract_hint(item) or default_hint_id
         orgao = _extract_orgao(item)
+        uf = _infer_remuneracao_uf(item, orgao)
         cargo_funcao = item.get("cargo") or item.get("funcao")
         remuneracoes = item.get("remuneracoesDTO")
         if isinstance(remuneracoes, list) and remuneracoes:
@@ -380,7 +431,7 @@ def _map_remuneracao_items(
                     "person_name_original": name,
                     "person_name_norm": normalize_name(name),
                     "person_hint_id": hint_id,
-                    "uf": "BR",
+                    "uf": uf,
                     "municipio": None,
                     "orgao": orgao,
                     "tipo_recebimento": "FOLHA",
@@ -433,7 +484,7 @@ def _map_remuneracao_items(
             "person_name_original": name,
             "person_name_norm": normalize_name(name),
             "person_hint_id": hint_id,
-            "uf": "BR",
+            "uf": uf,
             "municipio": None,
             "orgao": orgao,
             "tipo_recebimento": "FOLHA",
@@ -949,7 +1000,7 @@ def ingest_portal_federal_favorecido_for_names(names: list[str]) -> IngestResult
         )
 
 
-def ingest_portal_federal_for_cpfs(cpfs: list[str]) -> IngestResult:
+def ingest_portal_federal_for_cpfs(cpfs: list[str], mes_anos: list[str] | None = None) -> IngestResult:
     settings = get_settings()
     collected_at = now_utc_iso()
     if not settings.federal_api_key:
@@ -979,14 +1030,14 @@ def ingest_portal_federal_for_cpfs(cpfs: list[str]) -> IngestResult:
     headers = {"chave-api-dados": settings.federal_api_key}
     session = requests.Session()
     timeout = settings.federal_timeout
-    mes_anos = _mes_ano_candidates(settings.federal_mes_ano)
+    mes_anos = mes_anos or _mes_ano_candidates(settings.federal_mes_ano)
 
     try:
         raw_files = 0
         total_records = 0
         for cpf in cleaned:
             remun_params = {"pagina": 1, "cpf": cpf}
-            remun_resp, mes_ano_used = _fetch_remuneracao(
+            remun_responses = _fetch_remuneracoes(
                 session,
                 settings.federal_base_url,
                 headers,
@@ -994,7 +1045,7 @@ def ingest_portal_federal_for_cpfs(cpfs: list[str]) -> IngestResult:
                 mes_anos,
                 timeout,
             )
-            if remun_resp and mes_ano_used:
+            for remun_resp, mes_ano_used in remun_responses:
                 raw_delta, records_delta = _persist_remuneracao_response(
                     remun_resp,
                     cpf,
@@ -1032,7 +1083,7 @@ def ingest_portal_federal_for_cpfs(cpfs: list[str]) -> IngestResult:
         )
 
 
-def ingest_portal_federal_for_names(names: list[str]) -> IngestResult:
+def ingest_portal_federal_for_names(names: list[str], mes_anos: list[str] | None = None) -> IngestResult:
     settings = get_settings()
     collected_at = now_utc_iso()
     if not settings.federal_api_key:
@@ -1057,7 +1108,7 @@ def ingest_portal_federal_for_names(names: list[str]) -> IngestResult:
     headers = {"chave-api-dados": settings.federal_api_key}
     session = requests.Session()
     timeout = settings.federal_timeout
-    mes_anos = _mes_ano_candidates(settings.federal_mes_ano)
+    mes_anos = mes_anos or _mes_ano_candidates(settings.federal_mes_ano)
 
     try:
         raw_files = 0
@@ -1092,7 +1143,7 @@ def ingest_portal_federal_for_names(names: list[str]) -> IngestResult:
                         continue
                     seen_ids.add(key_id)
                     params = {"pagina": 1, "idServidorAposentadoPensionista": servidor_id}
-                    remun_resp, mes_ano_used = _fetch_remuneracao(
+                    remun_responses = _fetch_remuneracoes(
                         session,
                         settings.federal_base_url,
                         headers,
@@ -1100,7 +1151,7 @@ def ingest_portal_federal_for_names(names: list[str]) -> IngestResult:
                         mes_anos,
                         timeout,
                     )
-                    if remun_resp and mes_ano_used:
+                    for remun_resp, mes_ano_used in remun_responses:
                         raw_delta, records_delta = _persist_remuneracao_response(
                             remun_resp,
                             str(servidor_id),
@@ -1152,7 +1203,7 @@ def ingest_portal_federal_for_names(names: list[str]) -> IngestResult:
                             continue
                         seen_ids.add(key_id)
                         params = {"pagina": 1, key: value}
-                        remun_resp, mes_ano_used = _fetch_remuneracao(
+                        remun_responses = _fetch_remuneracoes(
                             session,
                             settings.federal_base_url,
                             headers,
@@ -1160,7 +1211,7 @@ def ingest_portal_federal_for_names(names: list[str]) -> IngestResult:
                             mes_anos,
                             timeout,
                         )
-                        if remun_resp and mes_ano_used:
+                        for remun_resp, mes_ano_used in remun_responses:
                             raw_delta, records_delta = _persist_remuneracao_response(
                                 remun_resp,
                                 str(value),

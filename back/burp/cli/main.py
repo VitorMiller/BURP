@@ -9,7 +9,7 @@ from burp.er.clustering import cluster_records
 from burp.ingest import run_ingest
 from burp.normalization.name import normalize_name
 from burp.normalization.recebimento import normalize_tipo, normalize_tipo_filter
-from burp.storage import backfill_diaria_from_favorecido, list_sources, search_records
+from burp.storage import list_sources, search_records
 
 
 def cmd_ingest(args: argparse.Namespace) -> None:
@@ -58,12 +58,6 @@ def cmd_search(args: argparse.Namespace) -> None:
 def cmd_sources(_args: argparse.Namespace) -> None:
     print(json.dumps({"sources": list_sources()}, ensure_ascii=False, indent=2))
 
-
-def cmd_backfill_diaria(_args: argparse.Namespace) -> None:
-    result = backfill_diaria_from_favorecido()
-    print(json.dumps(result, ensure_ascii=False, indent=2))
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="burp")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -73,14 +67,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--target",
         action="append",
         default=[],
-        help="Target source (vitoria, vilavelha, ckan, fapes, facto, federal)",
+        help="Target source (federal, fapes, facto)",
     )
     ingest.add_argument("--facto-nome", default=None, help="Name filter for FACTO")
     ingest.set_defaults(func=cmd_ingest)
 
     search = sub.add_parser("search", help="Search by name")
     search.add_argument("--nome", required=True, help="Name to search")
-    search.add_argument("--tipo", default="todos", help="folha|bolsa|diaria|todos")
+    search.add_argument("--tipo", default="todos", help="folha|bolsa|todos")
     search.add_argument("--uf", default="ES", help="UF")
     search.add_argument("--municipio", default=None, help="Municipio")
     search.add_argument("--data-inicio", default=None, help="Inicio da analise YYYY-MM-DD")
@@ -89,9 +83,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     sources = sub.add_parser("sources", help="List sources status")
     sources.set_defaults(func=cmd_sources)
-
-    backfill = sub.add_parser("backfill-diaria", help="Backfill DIARIA from portal_federal_favorecido")
-    backfill.set_defaults(func=cmd_backfill_diaria)
 
     return parser
 

@@ -14,9 +14,9 @@ from burp.analysis import build_period_report, extract_record_month_key
 from burp.connectors.facto import ingest_facto
 from burp.connectors.fapes import ingest_fapes
 from burp.connectors.portal_federal import (
-    ingest_portal_federal_favorecido_for_names,
     ingest_portal_federal_for_cpfs,
     ingest_portal_federal_for_names,
+    mes_anos_for_period,
 )
 from burp.connectors.sources import list_sources_meta
 from burp.er.clustering import cluster_id_for_record, cluster_records
@@ -322,22 +322,25 @@ def _rebusca_facto(names: list[str], start_date: date | None = None, end_date: d
             "enabled": False,
             "error": "source_disabled",
         }
-    start_date: date | None = None
-    end_date: date | None = None
-    if start_date and end_date:
-        pass
-    elif settings.facto_start_date and settings.facto_end_date:
-        start_date = settings.facto_start_date
-        end_date = settings.facto_end_date
-    else:
-        end_date = date.today()
-        start_date = end_date - timedelta(days=settings.facto_days)
+    resolved_start = start_date
+    resolved_end = end_date
+    if resolved_start and not resolved_end:
+        resolved_end = date.today()
+    elif resolved_end and not resolved_start:
+        resolved_start = date(resolved_end.year, 1, 1)
+    elif not resolved_start and not resolved_end:
+        if settings.facto_start_date and settings.facto_end_date:
+            resolved_start = settings.facto_start_date
+            resolved_end = settings.facto_end_date
+        else:
+            resolved_end = date.today()
+            resolved_start = resolved_end - timedelta(days=settings.facto_days)
 
     results = []
     for name in names:
         if not name:
             continue
-        result = ingest_facto(name, start_date=start_date, end_date=end_date)
+        result = ingest_facto(name, start_date=resolved_start, end_date=resolved_end)
         results.append(result.__dict__)
     return {
         "performed": bool(results),
@@ -346,13 +349,18 @@ def _rebusca_facto(names: list[str], start_date: date | None = None, end_date: d
         "results": results,
         "enabled": True,
         "period": {
-            "start": start_date.isoformat() if start_date else None,
-            "end": end_date.isoformat() if end_date else None,
+            "start": resolved_start.isoformat() if resolved_start else None,
+            "end": resolved_end.isoformat() if resolved_end else None,
         },
     }
 
 
-def _rebusca_federal(names: list[str], cpfs: list[str] | None = None) -> dict[str, Any]:
+def _rebusca_federal(
+    names: list[str],
+    cpfs: list[str] | None = None,
+    data_inicio: date | None = None,
+    data_fim: date | None = None,
+) -> dict[str, Any]:
     settings = get_settings()
     if not settings.source_federal_enabled:
         return {
@@ -364,14 +372,13 @@ def _rebusca_federal(names: list[str], cpfs: list[str] | None = None) -> dict[st
             "error": "source_disabled",
         }
     results = []
-    result_favorecido = ingest_portal_federal_favorecido_for_names(names)
-    results.append(result_favorecido.__dict__)
     cpf_list = cpfs or []
+    mes_anos = mes_anos_for_period(data_inicio, data_fim, settings.federal_mes_ano)
     if cpf_list:
-        cpf_result = ingest_portal_federal_for_cpfs(cpf_list)
+        cpf_result = ingest_portal_federal_for_cpfs(cpf_list, mes_anos=mes_anos)
         results.append(cpf_result.__dict__)
     elif settings.federal_api_key:
-        result = ingest_portal_federal_for_names(names)
+        result = ingest_portal_federal_for_names(names, mes_anos=mes_anos)
         results.append(result.__dict__)
     else:
         results.append(
@@ -393,7 +400,7 @@ def _rebusca_federal(names: list[str], cpfs: list[str] | None = None) -> dict[st
     }
 
 
-def _ensure_fapes_ingested() -> dict[str, Any]:
+def _ensure_fapes_ingested(force: bool = False) -> dict[str, Any]:
     settings = get_settings()
     if not settings.source_fapes_enabled:
         return {
@@ -403,18 +410,19 @@ def _ensure_fapes_ingested() -> dict[str, Any]:
             "enabled": False,
             "error": "source_disabled",
         }
-    sources = list_sources()
-    for source in sources:
-        if source.get("source_id") == "fapes_bolsas":
-            if source.get("last_status") == "ok" and source.get("last_run_at"):
-                return {
-                    "performed": False,
-                    "source": "fapes_bolsas",
-                    "results": [],
-                    "enabled": True,
-                    "notes": "already_ingested",
-                }
-            break
+    if not force:
+        sources = list_sources()
+        for source in sources:
+            if source.get("source_id") == "fapes_bolsas":
+                if source.get("last_status") == "ok" and source.get("last_run_at"):
+                    return {
+                        "performed": False,
+                        "source": "fapes_bolsas",
+                        "results": [],
+                        "enabled": True,
+                        "notes": "already_ingested",
+                    }
+                break
     result = ingest_fapes()
     return {
         "performed": True,
@@ -452,11 +460,11 @@ def _run_query_refresh(
         },
     }
     if include_fapes:
-        payload["fapes"] = _ensure_fapes_ingested()
+        payload["fapes"] = _ensure_fapes_ingested(force=True)
     if include_facto:
         payload["facto"] = _rebusca_facto(candidate_list[:3], data_inicio, data_fim)
     if include_federal:
-        payload["federal"] = _rebusca_federal(candidate_list[:1], cpf_list)
+        payload["federal"] = _rebusca_federal(candidate_list[:1], cpf_list, data_inicio, data_fim)
     return payload
 
 
@@ -477,13 +485,18 @@ def _dedup_key(record: dict[str, Any]) -> tuple[Any, ...]:
     if source_id == "facto_conveniar":
         detalhes = record.get("detalhes_json")
         raw = detalhes.get("raw") if isinstance(detalhes, dict) else None
+        periodo = detalhes.get("periodo") if isinstance(detalhes, dict) else None
         raw_key = json.dumps(raw, ensure_ascii=True, sort_keys=True) if isinstance(raw, dict) else None
+        # FACTO can emit the same beneficiary and amount in different windows; period keeps
+        # distinct monthly receipts from collapsing into a single record in the report.
         return (
             source_id,
             record.get("person_name_norm"),
             record.get("person_hint_id"),
+            periodo,
             record.get("valor_bruto"),
             record.get("valor_liquido"),
+            record.get("source_url"),
             raw_key,
         )
     base = (
@@ -665,7 +678,7 @@ async def search(
             data_fim=period_bounds[1] if period_bounds else None,
             include_fapes=True,
             include_facto=True,
-            include_federal=bool(cpf),
+            include_federal=True,
         )
         rebusca_info = refresh_payload
         cpf_masked = refresh_payload.get("cpf_masked", [])
@@ -697,7 +710,7 @@ async def summary(
             data_fim=period_bounds[1] if period_bounds else None,
             include_fapes=True,
             include_facto=True,
-            include_federal=bool(cpf),
+            include_federal=True,
         )
         cpf_masked = refresh_payload.get("cpf_masked", [])
         records = _load_query_records(filters)

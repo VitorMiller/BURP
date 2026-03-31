@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Iterable
 import unicodedata
 
+from burp.connectors.sources import active_source_ids
 from burp.normalization.recebimento import infer_recebimento_tipo, normalize_tipo
 from burp.settings import get_settings
 from burp.utils import dump_json
@@ -113,6 +114,18 @@ def get_conn() -> sqlite3.Connection:
     return conn
 
 
+def _active_source_ids() -> list[str]:
+    return active_source_ids()
+
+
+def _source_in_clause() -> tuple[str, list[str]]:
+    source_ids = _active_source_ids()
+    if not source_ids:
+        return "", []
+    placeholders = ",".join("?" for _ in source_ids)
+    return placeholders, source_ids
+
+
 def init_db() -> None:
     settings = get_settings()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
@@ -120,6 +133,7 @@ def init_db() -> None:
     try:
         conn.executescript(SCHEMA)
         _ensure_records_columns(conn)
+        _backfill_portal_federal_ufs(conn)
         _backfill_record_hashes_and_dedupe(conn)
         _ensure_record_hash_constraint(conn)
         conn.commit()
@@ -317,6 +331,76 @@ def _rebuild_records_fts(conn: sqlite3.Connection) -> None:
     )
 
 
+def _normalize_text(value: Any) -> str:
+    if value is None:
+        return ""
+    return unaccent(str(value)).upper().strip()
+
+
+def _infer_portal_federal_uf(details: dict[str, Any], orgao: Any = None) -> str | None:
+    candidates: list[Any] = [orgao]
+    raw = details.get("raw")
+    if isinstance(raw, dict):
+        candidates.extend(
+            [
+                raw.get("ufFavorecido"),
+                raw.get("orgao"),
+                raw.get("ug"),
+                raw.get("uo"),
+            ]
+        )
+
+    servidor = details.get("servidor")
+    if isinstance(servidor, dict):
+        estado_exercicio = servidor.get("estadoExercicio")
+        if isinstance(estado_exercicio, dict):
+            sigla = _normalize_text(estado_exercicio.get("sigla"))
+            if sigla and sigla != "-1":
+                return sigla
+            candidates.append(estado_exercicio.get("nome"))
+
+        orgao_lotacao = servidor.get("orgaoServidorLotacao")
+        if isinstance(orgao_lotacao, dict):
+            candidates.extend([orgao_lotacao.get("sigla"), orgao_lotacao.get("nome")])
+
+        orgao_exercicio = servidor.get("orgaoServidorExercicio")
+        if isinstance(orgao_exercicio, dict):
+            candidates.extend([orgao_exercicio.get("sigla"), orgao_exercicio.get("nome")])
+
+    for candidate in candidates:
+        normalized = _normalize_text(candidate)
+        if not normalized:
+            continue
+        if len(normalized) == 2 and normalized.isalpha():
+            return normalized
+        if normalized == "IFES" or "ESPIRITO SANTO" in normalized:
+            return "ES"
+    return None
+
+
+def _backfill_portal_federal_ufs(conn: sqlite3.Connection) -> None:
+    rows = conn.execute(
+        """
+        SELECT record_id, uf, orgao, detalhes_json
+        FROM records
+        WHERE source_id LIKE 'portal_federal_%'
+          AND (uf IS NULL OR uf = '' OR uf = 'BR')
+        """
+    ).fetchall()
+    if not rows:
+        return
+
+    updates: list[tuple[str, int]] = []
+    for row in rows:
+        details = _deserialize_details(row["detalhes_json"])
+        inferred = _infer_portal_federal_uf(details, row["orgao"])
+        if inferred and inferred != row["uf"]:
+            updates.append((inferred, int(row["record_id"])))
+
+    if updates:
+        conn.executemany("UPDATE records SET uf = ? WHERE record_id = ?", updates)
+
+
 def _backfill_record_hashes_and_dedupe(conn: sqlite3.Connection) -> None:
     rows = conn.execute(
         """
@@ -427,7 +511,13 @@ def refresh_clusters(clusters: Iterable[dict[str, Any]]) -> None:
 def list_sources() -> list[dict[str, Any]]:
     conn = get_conn()
     try:
-        rows = conn.execute("SELECT * FROM sources ORDER BY source_id").fetchall()
+        placeholders, source_ids = _source_in_clause()
+        if not placeholders:
+            return []
+        rows = conn.execute(
+            f"SELECT * FROM sources WHERE source_id IN ({placeholders}) ORDER BY source_id",
+            source_ids,
+        ).fetchall()
         return [dict(row) for row in rows]
     finally:
         conn.close()
@@ -436,14 +526,18 @@ def list_sources() -> list[dict[str, Any]]:
 def list_distinct_names(limit: int = 5) -> list[str]:
     conn = get_conn()
     try:
+        placeholders, source_ids = _source_in_clause()
+        if not placeholders:
+            return []
         rows = conn.execute(
-            """
+            f"""
             SELECT DISTINCT person_name_original
             FROM records
             WHERE person_name_original IS NOT NULL AND person_name_original != ''
+              AND source_id IN ({placeholders})
             LIMIT ?
             """,
-            (limit,),
+            [*source_ids, limit],
         ).fetchall()
         return [row[0] for row in rows]
     finally:
@@ -453,7 +547,13 @@ def list_distinct_names(limit: int = 5) -> list[str]:
 def list_all_records() -> list[dict[str, Any]]:
     conn = get_conn()
     try:
-        rows = conn.execute("SELECT * FROM records").fetchall()
+        placeholders, source_ids = _source_in_clause()
+        if not placeholders:
+            return []
+        rows = conn.execute(
+            f"SELECT * FROM records WHERE source_id IN ({placeholders})",
+            source_ids,
+        ).fetchall()
         return [dict(row) for row in rows]
     finally:
         conn.close()
@@ -462,6 +562,9 @@ def list_all_records() -> list[dict[str, Any]]:
 def search_records(name_norm: str, tipo: str | None, uf: str | None, municipio: str | None) -> list[dict[str, Any]]:
     conn = get_conn()
     try:
+        placeholders, source_ids = _source_in_clause()
+        if not placeholders:
+            return []
         tokens = [token for token in name_norm.split() if token]
         fts_query = " AND ".join(tokens) if tokens else name_norm
         params: list[Any] = []
@@ -471,8 +574,16 @@ def search_records(name_norm: str, tipo: str | None, uf: str | None, municipio: 
             filters.append("r.tipo_recebimento = ?")
             params.append(tipo.upper())
         if uf:
-            filters.append("r.uf = ?")
-            params.append(uf.upper())
+            uf_norm = uf.upper()
+            if uf_norm == "ES":
+                filters.append(
+                    "(r.uf = ? OR ((r.uf = 'BR' OR r.uf IS NULL OR r.uf = '') "
+                    "AND r.source_id LIKE 'portal_federal_%'))"
+                )
+                params.append(uf_norm)
+            else:
+                filters.append("r.uf = ?")
+                params.append(uf_norm)
         if municipio:
             filters.append("r.municipio = ?")
             params.append(municipio)
@@ -488,9 +599,11 @@ def search_records(name_norm: str, tipo: str | None, uf: str | None, municipio: 
             "LEFT JOIN raw_files rf ON r.raw_id = rf.raw_id "
             "WHERE r.record_id IN ("
             "  SELECT rowid FROM records_fts WHERE records_fts MATCH ?"
-            ")" + filter_sql
+            ")"
+            f" AND r.source_id IN ({placeholders})"
+            + filter_sql
         )
-        params = [fts_query] + params
+        params = [fts_query, *source_ids, *params]
         rows = conn.execute(query, params).fetchall()
         results = [dict(row) for row in rows]
         if results:
@@ -502,9 +615,9 @@ def search_records(name_norm: str, tipo: str | None, uf: str | None, municipio: 
             "FROM records r "
             "JOIN sources s ON r.source_id = s.source_id "
             "LEFT JOIN raw_files rf ON r.raw_id = rf.raw_id "
-            "WHERE r.person_name_norm LIKE ?" + filter_sql
+            f"WHERE r.person_name_norm LIKE ? AND r.source_id IN ({placeholders})" + filter_sql
         )
-        like_params = [f"%{name_norm}%"] + params[1:]
+        like_params = [f"%{name_norm}%", *source_ids, *params[1 + len(source_ids):]]
         rows = conn.execute(like_query, like_params).fetchall()
         return [dict(row) for row in rows]
     finally:
@@ -528,6 +641,9 @@ def get_cluster(cluster_id: str) -> dict[str, Any] | None:
 def list_records_for_cluster(cluster: dict[str, Any]) -> list[dict[str, Any]]:
     conn = get_conn()
     try:
+        placeholders, source_ids = _source_in_clause()
+        if not placeholders:
+            return []
         filters = ["person_name_norm = ?"]
         params: list[Any] = [cluster["person_name_norm"]]
         if cluster.get("municipio"):
@@ -541,9 +657,9 @@ def list_records_for_cluster(cluster: dict[str, Any]) -> list[dict[str, Any]]:
             "FROM records r "
             "JOIN sources s ON r.source_id = s.source_id "
             "LEFT JOIN raw_files rf ON r.raw_id = rf.raw_id "
-            "WHERE " + " AND ".join(filters) + " ORDER BY r.competencia DESC"
+            f"WHERE r.source_id IN ({placeholders}) AND " + " AND ".join(filters) + " ORDER BY r.competencia DESC"
         )
-        rows = conn.execute(sql, params).fetchall()
+        rows = conn.execute(sql, [*source_ids, *params]).fetchall()
         return [dict(row) for row in rows]
     finally:
         conn.close()
