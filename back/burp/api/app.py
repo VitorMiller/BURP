@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
-from burp.analysis import build_period_report, extract_record_month_key
+from burp.analysis import build_period_report, extract_record_month_key, resolve_record_amount
 from burp.connectors.facto import ingest_facto
 from burp.connectors.fapes import ingest_fapes
 from burp.connectors.portal_federal import (
@@ -69,9 +69,7 @@ def _build_simple_monthly_summary(records: list[dict[str, Any]]) -> dict[str, An
     valid_months: set[str] = set()
 
     for record in records:
-        value = record.get("valor_liquido")
-        if value is None:
-            value = record.get("valor_bruto")
+        value = resolve_record_amount(record)
         if value is None:
             continue
         value_float = float(value)
@@ -152,9 +150,7 @@ def _build_monthly_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
     total_value_by_source: dict[str, float] = {}
     total_value_by_tipo: dict[str, float] = {"FOLHA": 0.0, "BOLSA": 0.0, "DIARIA": 0.0}
     for record in records:
-        value = record.get("valor_liquido")
-        if value is None:
-            value = record.get("valor_bruto")
+        value = resolve_record_amount(record)
         if value is None:
             continue
         records_with_value_total += 1

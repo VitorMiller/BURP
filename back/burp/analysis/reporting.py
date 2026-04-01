@@ -14,10 +14,16 @@ def _round_money(value: float) -> float:
     return 0.0 if abs(rounded) < 0.005 else rounded
 
 
-def _record_value(record: dict[str, Any]) -> float | None:
-    value = record.get("valor_liquido")
-    if value is None:
+def resolve_record_amount(record: dict[str, Any]) -> float | None:
+    source_id = str(record.get("source_id") or "")
+    if source_id.startswith("portal_federal_"):
         value = record.get("valor_bruto")
+        if value is None:
+            value = record.get("valor_liquido")
+    else:
+        value = record.get("valor_liquido")
+        if value is None:
+            value = record.get("valor_bruto")
     if value is None:
         return None
     return float(value)
@@ -154,7 +160,7 @@ def build_period_report(records: list[dict[str, Any]], start_date: date, end_dat
     monthly_records = 0
 
     for record in records:
-        value = _record_value(record)
+        value = resolve_record_amount(record)
         if value is None:
             continue
         record_date = extract_record_date(record)
@@ -237,7 +243,7 @@ def build_period_report(records: list[dict[str, Any]], start_date: date, end_dat
             "end": end_date.isoformat(),
             "months_in_scope": len(months_payload),
         },
-        "calculation_basis": "valor_liquido_or_valor_bruto",
+        "calculation_basis": "portal_federal_uses_valor_bruto_other_sources_use_valor_liquido_or_valor_bruto",
         "ceiling_reference": build_ceiling_reference(years_in_scope),
         "monthly": months_payload,
         "totals": {

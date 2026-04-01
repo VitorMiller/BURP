@@ -70,7 +70,6 @@ def _map_facto_rows(
         valor = parse_decimal(row.get(valor_key)) if valor_key else None
         competencia = parse_competencia(row.get(data_key)) if data_key else None
         orgao = row.get(orgao_key) if orgao_key else None
-        tipo = "FOLHA" if categoria == "servidores" else "BOLSA"
         record = {
             "source_id": source_id,
             "raw_id": raw_id,
@@ -80,7 +79,7 @@ def _map_facto_rows(
             "uf": "ES",
             "municipio": None,
             "orgao": orgao,
-            "tipo_recebimento": tipo,
+            "tipo_recebimento": "BOLSA",
             "competencia": competencia,
             "data_pagamento": None,
             "valor_bruto": valor,

@@ -134,6 +134,7 @@ def init_db() -> None:
         conn.executescript(SCHEMA)
         _ensure_records_columns(conn)
         _backfill_portal_federal_ufs(conn)
+        _backfill_facto_as_bolsa(conn)
         _backfill_record_hashes_and_dedupe(conn)
         _ensure_record_hash_constraint(conn)
         conn.commit()
@@ -407,6 +408,42 @@ def _backfill_portal_federal_ufs(conn: sqlite3.Connection) -> None:
 
     if updates:
         conn.executemany("UPDATE records SET uf = ? WHERE record_id = ?", updates)
+
+
+def _backfill_facto_as_bolsa(conn: sqlite3.Connection) -> None:
+    rows = conn.execute(
+        """
+        SELECT record_id, tipo_recebimento
+        FROM records
+        WHERE source_id = 'facto_conveniar'
+          AND (tipo_recebimento IS NULL OR tipo_recebimento != 'BOLSA')
+        """
+    ).fetchall()
+    if not rows:
+        return
+
+    updates: list[tuple[str, str, str, int]] = []
+    for row in rows:
+        current_tipo = row["tipo_recebimento"]
+        updates.append(
+            (
+                "BOLSA",
+                current_tipo or "FOLHA",
+                "source_policy:facto_conveniar_is_bolsa",
+                int(row["record_id"]),
+            )
+        )
+
+    conn.executemany(
+        """
+        UPDATE records
+        SET tipo_recebimento = ?,
+            tipo_original = COALESCE(tipo_original, ?),
+            tipo_reason = COALESCE(tipo_reason, ?)
+        WHERE record_id = ?
+        """,
+        updates,
+    )
 
 
 def _backfill_record_hashes_and_dedupe(conn: sqlite3.Connection) -> None:

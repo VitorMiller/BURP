@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 
 import burp.api.app as api_app_module
 from burp.api.app import app
+from burp.connectors.facto import _map_facto_rows
 from burp.connectors.fapes import _select_xlsx_resources
 from burp.connectors.sources import list_sources_meta
 from burp.connectors.base import IngestResult
@@ -48,7 +49,7 @@ def _fixture_records() -> list[dict[str, object]]:
             "tipo_recebimento": "FOLHA",
             "competencia": "2025-01",
             "data_pagamento": None,
-            "valor_bruto": 43000.0,
+            "valor_bruto": 44300.0,
             "descontos": 0.0,
             "valor_liquido": 43000.0,
             "cargo_funcao": "DOCENTE",
@@ -99,7 +100,7 @@ def _fixture_records() -> list[dict[str, object]]:
             "tipo_recebimento": "FOLHA",
             "competencia": "2025-02",
             "data_pagamento": None,
-            "valor_bruto": 43000.0,
+            "valor_bruto": 44300.0,
             "descontos": 0.0,
             "valor_liquido": 43000.0,
             "cargo_funcao": "DOCENTE",
@@ -168,7 +169,25 @@ def _assert_fapes_report_dedup() -> None:
         raise AssertionError("FAPES yearly and monthly versions of the same raw row should dedupe in reports")
 
 
+def _assert_facto_is_bolsa() -> None:
+    rows = [{"favorecido": "MARIA DE TESTE", "valor": "2000,00"}]
+    mapped = _map_facto_rows(
+        rows,
+        source_id="facto_conveniar",
+        raw_id=1,
+        source_url="fixture://facto/servidores",
+        collected_at=now_utc_iso(),
+        categoria="servidores",
+        periodo="01/02/2025 - 28/02/2025",
+    )
+    if not mapped:
+        raise AssertionError("FACTO fixture should produce at least one mapped row")
+    if mapped[0].get("tipo_recebimento") != "BOLSA":
+        raise AssertionError("FACTO should always be classified as BOLSA")
+
+
 def main() -> None:
+    _assert_facto_is_bolsa()
     _assert_fapes_resource_selection()
     _assert_fapes_report_dedup()
     init_db()
@@ -243,10 +262,16 @@ def main() -> None:
         raise AssertionError("february should stay below the configured ceiling")
     if january["totals_by_tipo"].get("BOLSA") != 5000.0:
         raise AssertionError("fapes total not captured in period report")
-    if january["totals_by_source"].get("portal_federal_remuneracao") != 43000.0:
-        raise AssertionError("portal federal salary should be included in aggregation")
+    if january["totals_by_source"].get("portal_federal_remuneracao") != 44300.0:
+        raise AssertionError("portal federal salary should use valor_bruto in aggregation")
     if february["totals_by_source"].get("facto_conveniar") != 2000.0:
         raise AssertionError("facto total not captured in period report")
+    if february["totals_by_source"].get("portal_federal_remuneracao") != 44300.0:
+        raise AssertionError("portal federal salary should use valor_bruto in monthly totals")
+    if search_payload["period_report"].get("calculation_basis") != (
+        "portal_federal_uses_valor_bruto_other_sources_use_valor_liquido_or_valor_bruto"
+    ):
+        raise AssertionError("period report should expose the updated calculation basis")
 
     artifacts_dir = ROOT / "artifacts"
     artifacts_dir.mkdir(parents=True, exist_ok=True)
