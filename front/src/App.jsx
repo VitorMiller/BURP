@@ -145,6 +145,8 @@ export default function App() {
   const summary = result?.period_report?.totals;
   const homonymRisk = result?.match_context?.homonym_risk || "N/A";
   const shouldRefreshFederal = true;
+  const cpfDigits = form.cpf.replace(/\D/g, "");
+  const canRefresh = Boolean(form.nome) && cpfDigits.length === 11 && !refreshing;
 
   const sourceHighlights = useMemo(() => {
     if (!summary?.by_source) {
@@ -285,7 +287,7 @@ export default function App() {
                 name="cpf"
                 value={form.cpf}
                 onChange={updateField}
-                placeholder="Opcional. Ajuda a refinar a busca de salário no Portal da Transparência."
+                placeholder="Obrigatório para atualizar FACTO. Também ajuda a filtrar a busca."
               />
             </label>
 
@@ -295,10 +297,12 @@ export default function App() {
             <button className="button button--primary" disabled={!form.nome || loading} onClick={runSearch}>
               {loading ? "Consultando..." : "Consultar base local"}
             </button>
-            <button className="button button--secondary" disabled={!form.nome || refreshing} onClick={refreshSources}>
+            <button className="button button--secondary" disabled={!canRefresh} onClick={refreshSources}>
               {refreshing ? "Atualizando..." : "Atualizar Portal + FAPES + FACTO"}
             </button>
           </div>
+
+          <p className="small-muted">O refresh da FACTO agora exige CPF válido com 11 dígitos.</p>
 
           {refreshInfo ? (
             <div className="inline-note">

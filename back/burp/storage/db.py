@@ -135,6 +135,7 @@ def init_db() -> None:
         _ensure_records_columns(conn)
         _backfill_portal_federal_ufs(conn)
         _backfill_facto_as_bolsa(conn)
+        _purge_legacy_facto_window_summaries(conn)
         _backfill_record_hashes_and_dedupe(conn)
         _ensure_record_hash_constraint(conn)
         conn.commit()
@@ -294,6 +295,13 @@ def _normalized_money(value: Any) -> float | None:
 def _record_identity_payload(record: dict[str, Any]) -> dict[str, Any]:
     detalhes = _deserialize_details(record.get("detalhes_json"))
     raw = detalhes.get("raw") if isinstance(detalhes, dict) else None
+    if record.get("source_id") == "facto_conveniar" and isinstance(raw, dict):
+        cod_lancamento = raw.get("CodLancamento") or detalhes.get("cod_lancamento")
+        if cod_lancamento is not None:
+            return {
+                "source_id": record.get("source_id"),
+                "cod_lancamento": cod_lancamento,
+            }
     raw_key = None
     if isinstance(raw, (dict, list)):
         raw_key = json.dumps(raw, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
@@ -444,6 +452,19 @@ def _backfill_facto_as_bolsa(conn: sqlite3.Connection) -> None:
         """,
         updates,
     )
+
+
+def _purge_legacy_facto_window_summaries(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        DELETE FROM records
+        WHERE source_id = 'facto_conveniar'
+          AND (competencia IS NULL OR competencia = '')
+          AND (data_pagamento IS NULL OR data_pagamento = '')
+          AND json_extract(detalhes_json, '$.raw.CodLancamento') IS NULL
+        """
+    )
+    _rebuild_records_fts(conn)
 
 
 def _backfill_record_hashes_and_dedupe(conn: sqlite3.Connection) -> None:

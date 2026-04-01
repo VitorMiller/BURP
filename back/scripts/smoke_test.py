@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 
 import burp.api.app as api_app_module
 from burp.api.app import app
-from burp.connectors.facto import _map_facto_rows
+from burp.connectors.facto import _extract_facto_rows, _map_facto_rows
 from burp.connectors.fapes import _select_xlsx_resources
 from burp.connectors.sources import list_sources_meta
 from burp.connectors.base import IngestResult
@@ -83,14 +83,44 @@ def _fixture_records() -> list[dict[str, object]]:
             "raw_id": None,
             "orgao": "FACTO",
             "tipo_recebimento": "BOLSA",
-            "competencia": None,
-            "data_pagamento": None,
+            "competencia": "2025-01",
+            "data_pagamento": "2025-02-05",
             "valor_bruto": 2000.0,
             "descontos": None,
             "valor_liquido": 2000.0,
-            "cargo_funcao": None,
-            "detalhes_json": {"categoria": "pessoas_fisicas", "periodo": "01/02/2025 - 28/02/2025", "raw": {"favorecido": nome}},
+            "cargo_funcao": "Pagamento de Bolsa Pesquisa",
+            "detalhes_json": {
+                "categoria": "pessoas_fisicas",
+                "periodo": "01/02/2025 - 28/02/2025",
+                "raw": {
+                    "CodLancamento": 123,
+                    "NomeConvenio": "Projeto Teste",
+                    "NomeTipoPedido": "Pagamento de Bolsa Pesquisa",
+                    "DataPagamento": "2025-02-05T00:00:00",
+                    "DataCompetencia": "2025-01-01T00:00:00",
+                    "Valor": 2000.0,
+                },
+            },
             "source_url": "fixture://facto/2025-02",
+        },
+        {
+            **common,
+            "source_id": "facto_conveniar",
+            "raw_id": None,
+            "orgao": "FACTO",
+            "tipo_recebimento": "BOLSA",
+            "competencia": None,
+            "data_pagamento": None,
+            "valor_bruto": 9999.0,
+            "descontos": None,
+            "valor_liquido": 9999.0,
+            "cargo_funcao": None,
+            "detalhes_json": {
+                "categoria": "pessoas_fisicas",
+                "periodo": "01/02/2025 - 28/02/2025",
+                "raw": {"favorecido": nome, "valor total recebido": "R$ 9.999,00"},
+            },
+            "source_url": "fixture://facto/legacy-window-total",
         },
         {
             **common,
@@ -170,7 +200,26 @@ def _assert_fapes_report_dedup() -> None:
 
 
 def _assert_facto_is_bolsa() -> None:
-    rows = [{"favorecido": "MARIA DE TESTE", "valor": "2000,00"}]
+    rows = [
+        {
+            "favorecido": "MARIA DE TESTE",
+            "cpf": "***.123.456-**",
+            "NomeConvenio": "Projeto Teste",
+            "NomeTipoPedido": "Pagamento de Bolsa Pesquisa",
+            "DataPagamento": "2025-02-05T00:00:00",
+            "DataCompetencia": "2025-01-01T00:00:00",
+            "Valor": 2000.0,
+            "CodLancamento": 123,
+            "_facto_detail": {
+                "NomeConvenio": "Projeto Teste",
+                "NomeTipoPedido": "Pagamento de Bolsa Pesquisa",
+                "DataPagamento": "2025-02-05T00:00:00",
+                "DataCompetencia": "2025-01-01T00:00:00",
+                "Valor": 2000.0,
+                "CodLancamento": 123,
+            },
+        }
+    ]
     mapped = _map_facto_rows(
         rows,
         source_id="facto_conveniar",
@@ -179,27 +228,103 @@ def _assert_facto_is_bolsa() -> None:
         collected_at=now_utc_iso(),
         categoria="servidores",
         periodo="01/02/2025 - 28/02/2025",
+        default_cpf="12345678901",
     )
     if not mapped:
         raise AssertionError("FACTO fixture should produce at least one mapped row")
     if mapped[0].get("tipo_recebimento") != "BOLSA":
         raise AssertionError("FACTO should always be classified as BOLSA")
+    if mapped[0].get("competencia") != "2025-01":
+        raise AssertionError("FACTO detailed rows should preserve monthly competence")
+    if mapped[0].get("data_pagamento") != "2025-02-05":
+        raise AssertionError("FACTO detailed rows should preserve payment date")
+
+
+def _assert_facto_detail_html_parser() -> None:
+    html = """
+    <table id="gvPagamentosServidor">
+      <thead>
+        <tr>
+          <th></th><th>CPF</th><th>Matrícula do servidor</th><th>Favorecido</th><th>Valor total recebido</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="gridRow expandir" data-rowindex="0"
+            data-pagamentos='[{"CodLancamento":123,"NomeConvenio":"Projeto Teste","NomeTipoPedido":"Pagamento de Bolsa Pesquisa","DataPagamento":"2025-02-05T00:00:00","DataCompetencia":"2025-01-01T00:00:00","Valor":2000.0}]'>
+          <td></td><td>***.123.456-**</td><td>181****</td><td>MARIA DE TESTE</td><td>R$ 2.000,00</td>
+        </tr>
+      </tbody>
+    </table>
+    """
+    rows = _extract_facto_rows(html, "gvPagamentosServidor")
+    if len(rows) != 1:
+        raise AssertionError(f"FACTO parser should extract detailed payment rows, got: {rows}")
+    if rows[0].get("favorecido") != "MARIA DE TESTE":
+        raise AssertionError("FACTO parser should keep beneficiary from summary row")
+    if rows[0].get("CodLancamento") != 123:
+        raise AssertionError("FACTO parser should expose detailed payment identity")
+
+
+def _assert_facto_report_dedup() -> None:
+    record_base = {
+        "source_id": "facto_conveniar",
+        "person_name_original": "MARIA DE TESTE",
+        "person_name_norm": normalize_name("MARIA DE TESTE"),
+        "person_hint_id": "***.123.456-**",
+        "uf": "ES",
+        "municipio": None,
+        "orgao": "FACTO",
+        "tipo_recebimento": "BOLSA",
+        "competencia": "2025-01",
+        "data_pagamento": "2025-02-05",
+        "valor_bruto": 2000.0,
+        "descontos": None,
+        "valor_liquido": 2000.0,
+        "cargo_funcao": "Pagamento de Bolsa Pesquisa",
+        "source_url": "fixture://facto/a",
+        "collected_at": now_utc_iso(),
+        "parser_version": "smoke-test",
+        "detalhes_json": {
+            "categoria": "servidores",
+            "periodo": "01/02/2025 - 28/02/2025",
+            "raw": {"CodLancamento": 123, "Valor": 2000.0},
+        },
+    }
+    deduped = api_app_module._dedup_records(
+        [
+            record_base,
+            {
+                **record_base,
+                "source_url": "fixture://facto/b",
+                "detalhes_json": {
+                    "categoria": "pessoas_fisicas",
+                    "periodo": "01/01/2025 - 31/12/2025",
+                    "raw": {"CodLancamento": 123, "Valor": 2000.0},
+                },
+            },
+        ]
+    )
+    if len(deduped) != 1:
+        raise AssertionError("FACTO payments with the same CodLancamento should dedupe in reports")
 
 
 def main() -> None:
     _assert_facto_is_bolsa()
+    _assert_facto_detail_html_parser()
+    _assert_facto_report_dedup()
     _assert_fapes_resource_selection()
     _assert_fapes_report_dedup()
     init_db()
     ensure_sources([meta.__dict__ for meta in list_sources_meta()])
     insert_records(_fixture_records())
     client = TestClient(app)
-    captured_facto_calls: list[tuple[str | None, str | None, str | None]] = []
+    captured_facto_calls: list[tuple[str | None, str | None, str | None, str | None]] = []
 
-    def fake_ingest_facto(nome: str | None, start_date=None, end_date=None) -> IngestResult:
+    def fake_ingest_facto(nome: str | None, cpf: str | None = None, start_date=None, end_date=None) -> IngestResult:
         captured_facto_calls.append(
             (
                 nome,
+                cpf,
                 start_date.isoformat() if start_date else None,
                 end_date.isoformat() if end_date else None,
             )
@@ -220,6 +345,7 @@ def main() -> None:
         "/refresh/query",
         json={
             "nome": "MARIA DE TESTE",
+            "cpf": "123.123.123-12",
             "data_inicio": "2025-02-01",
             "data_fim": "2025-02-28",
             "include_fapes": False,
@@ -247,7 +373,7 @@ def main() -> None:
         raise AssertionError("health endpoint did not return ok")
     if not sources_payload.get("sources"):
         raise AssertionError("sources endpoint returned empty list")
-    if captured_facto_calls != [("MARIA DE TESTE", "2025-02-01", "2025-02-28")]:
+    if captured_facto_calls != [("MARIA DE TESTE", "12312312312", "2025-02-01", "2025-02-28")]:
         raise AssertionError(f"FACTO refresh ignored requested period: {captured_facto_calls}")
     if refresh_payload.get("refresh", {}).get("period") != {"start": "2025-02-01", "end": "2025-02-28"}:
         raise AssertionError("refresh/query should echo the requested period")

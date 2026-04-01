@@ -16,7 +16,11 @@ TARGETS = {
 }
 
 
-def run_ingest(targets: list[str] | None = None, facto_nome: str | None = None) -> dict:
+def run_ingest(
+    targets: list[str] | None = None,
+    facto_nome: str | None = None,
+    facto_cpf: str | None = None,
+) -> dict:
     init_db()
     ensure_sources([meta.__dict__ for meta in list_sources_meta()])
 
@@ -31,7 +35,7 @@ def run_ingest(targets: list[str] | None = None, facto_nome: str | None = None) 
     if wants("fapes"):
         results.append(ingest_fapes())
     if wants("facto"):
-        results.append(ingest_facto(facto_nome))
+        results.append(ingest_facto(facto_nome, cpf=facto_cpf))
 
     clusters = build_clusters()
     refresh_clusters(clusters)

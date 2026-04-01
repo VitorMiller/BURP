@@ -232,6 +232,68 @@ def _mask_cpf(value: str) -> str:
     return f"***.{digits[3:6]}.{digits[6:9]}-**"
 
 
+def _normalize_cpf_digits(value: str | None) -> str | None:
+    if not value:
+        return None
+    digits = re.sub(r"\D", "", str(value))
+    return digits if len(digits) == 11 else None
+
+
+def _extract_masked_cpf(value: Any) -> str | None:
+    match = re.search(r"([0-9*]{3}\.[0-9*]{3}\.[0-9*]{3}-[0-9*]{2})", str(value or ""))
+    if not match:
+        return None
+    return match.group(1)
+
+
+def _record_matches_cpf(record: dict[str, Any], cpf_digits: str | None) -> bool:
+    if not cpf_digits:
+        return True
+    target_masked = _mask_cpf(cpf_digits)
+    candidates: list[Any] = [record.get("person_hint_id")]
+    detalhes = record.get("detalhes_json")
+    if isinstance(detalhes, dict):
+        candidates.extend([detalhes.get("cpf"), detalhes.get("matricula_servidor")])
+        raw = detalhes.get("raw")
+        if isinstance(raw, dict):
+            candidates.extend([raw.get("cpf"), raw.get("CPF"), raw.get("documento")])
+
+    has_cpf_evidence = False
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        candidate_digits = re.sub(r"\D", "", str(candidate))
+        candidate_masked = _extract_masked_cpf(candidate)
+        if len(candidate_digits) == 11 or candidate_masked:
+            has_cpf_evidence = True
+        if len(candidate_digits) == 11 and candidate_digits == cpf_digits:
+            return True
+        if candidate_masked and candidate_masked == target_masked:
+            return True
+    return not has_cpf_evidence
+
+
+def _filter_records_by_cpf(records: list[dict[str, Any]], cpf: str | None) -> list[dict[str, Any]]:
+    cpf_digits = _normalize_cpf_digits(cpf)
+    if not cpf_digits:
+        return records
+    return [record for record in records if _record_matches_cpf(record, cpf_digits)]
+
+
+def _is_legacy_facto_window_summary(record: dict[str, Any]) -> bool:
+    if record.get("source_id") != "facto_conveniar":
+        return False
+    if record.get("competencia") or record.get("data_pagamento"):
+        return False
+    detalhes = record.get("detalhes_json")
+    if not isinstance(detalhes, dict):
+        return False
+    raw = detalhes.get("raw")
+    if isinstance(raw, dict) and raw.get("CodLancamento") is not None:
+        return False
+    return True
+
+
 def _parse_date_param(value: str | None, field_name: str) -> date | None:
     if value is None or not str(value).strip():
         return None
@@ -307,7 +369,12 @@ def _build_match_context(records: list[dict[str, Any]], clusters: list[dict[str,
     }
 
 
-def _rebusca_facto(names: list[str], start_date: date | None = None, end_date: date | None = None) -> dict[str, Any]:
+def _rebusca_facto(
+    names: list[str],
+    cpf: str,
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> dict[str, Any]:
     settings = get_settings()
     if not settings.source_facto_enabled:
         return {
@@ -336,7 +403,7 @@ def _rebusca_facto(names: list[str], start_date: date | None = None, end_date: d
     for name in names:
         if not name:
             continue
-        result = ingest_facto(name, start_date=resolved_start, end_date=resolved_end)
+        result = ingest_facto(name, cpf=cpf, start_date=resolved_start, end_date=resolved_end)
         results.append(result.__dict__)
     return {
         "performed": bool(results),
@@ -438,9 +505,15 @@ def _run_query_refresh(
     include_federal: bool = False,
 ) -> dict[str, Any]:
     cpf_list = _parse_cpfs(cpf)
-    cpf_masked = [_mask_cpf(value) for value in cpf_list if value]
+    cpf_masked = [_mask_cpf(value) for value in cpf_list if _normalize_cpf_digits(value)]
+    facto_cpf = next((digits for value in cpf_list if (digits := _normalize_cpf_digits(value))), None)
+    if include_facto and not facto_cpf:
+        raise HTTPException(status_code=422, detail="cpf_is_required_for_facto")
     candidate_names: dict[str, str] = {normalize_name(nome): nome}
-    existing_records = _deserialize_records(search_records(normalize_name(nome), None, "ES", None))
+    existing_records = _filter_records_by_cpf(
+        _deserialize_records(search_records(normalize_name(nome), None, "ES", None)),
+        facto_cpf,
+    )
     for record in existing_records:
         candidate = record.get("person_name_original")
         if candidate:
@@ -458,7 +531,7 @@ def _run_query_refresh(
     if include_fapes:
         payload["fapes"] = _ensure_fapes_ingested(force=True)
     if include_facto:
-        payload["facto"] = _rebusca_facto(candidate_list[:3], data_inicio, data_fim)
+        payload["facto"] = _rebusca_facto(candidate_list[:3], facto_cpf, data_inicio, data_fim)
     if include_federal:
         payload["federal"] = _rebusca_federal(candidate_list[:1], cpf_list, data_inicio, data_fim)
     return payload
@@ -472,6 +545,8 @@ def _deserialize_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 record["detalhes_json"] = json.loads(record["detalhes_json"])
             except json.JSONDecodeError:
                 pass
+        if _is_legacy_facto_window_summary(record):
+            continue
         parsed.append(record)
     return parsed
 
@@ -481,19 +556,16 @@ def _dedup_key(record: dict[str, Any]) -> tuple[Any, ...]:
     if source_id == "facto_conveniar":
         detalhes = record.get("detalhes_json")
         raw = detalhes.get("raw") if isinstance(detalhes, dict) else None
-        periodo = detalhes.get("periodo") if isinstance(detalhes, dict) else None
+        cod_lancamento = raw.get("CodLancamento") if isinstance(raw, dict) else None
+        if cod_lancamento is not None:
+            return (source_id, str(cod_lancamento))
         raw_key = json.dumps(raw, ensure_ascii=True, sort_keys=True) if isinstance(raw, dict) else None
-        # FACTO can emit the same beneficiary and amount in different windows; period keeps
-        # distinct monthly receipts from collapsing into a single record in the report.
         return (
             source_id,
-            record.get("person_name_norm"),
-            record.get("person_hint_id"),
-            periodo,
-            record.get("valor_bruto"),
-            record.get("valor_liquido"),
-            record.get("source_url"),
             raw_key,
+            record.get("person_name_norm"),
+            record.get("data_pagamento"),
+            record.get("competencia"),
         )
     base = (
         source_id,
@@ -617,10 +689,12 @@ async def sources() -> dict[str, Any]:
 async def ingest_run(payload: dict = Body(default=None)) -> dict[str, Any]:
     targets = []
     facto_nome = None
+    facto_cpf = None
     if payload:
         targets = payload.get("targets") or []
         facto_nome = payload.get("facto_nome")
-    result = run_ingest(targets=targets or ["all"], facto_nome=facto_nome)
+        facto_cpf = payload.get("facto_cpf")
+    result = run_ingest(targets=targets or ["all"], facto_nome=facto_nome, facto_cpf=facto_cpf)
     return result
 
 
@@ -661,15 +735,15 @@ async def search(
     municipio: str | None = Query(None),
     tipo: str = Query("todos"),
     rebusca: bool = Query(False),
-    cpf: str | None = Query(None, description="CPF (11 digitos) para busca de folha federal"),
+    cpf: str | None = Query(None, description="CPF (11 digitos) para filtro local e rebusca FACTO/Portal"),
     data_inicio: str | None = Query(None, description="YYYY-MM-DD"),
     data_fim: str | None = Query(None, description="YYYY-MM-DD"),
 ) -> dict[str, Any]:
     filters = _normalize_search_filters(nome, uf, municipio, tipo)
     period_bounds = _resolve_period_bounds(data_inicio, data_fim)
-    records = _load_query_records(filters)
+    records = _filter_records_by_cpf(_load_query_records(filters), cpf)
     rebusca_info = {"performed": False}
-    cpf_masked: list[str] = []
+    cpf_masked: list[str] = [_mask_cpf(digits) for digits in [_normalize_cpf_digits(cpf)] if digits]
     if rebusca:
         refresh_payload = _run_query_refresh(
             nome=nome,
@@ -682,7 +756,7 @@ async def search(
         )
         rebusca_info = refresh_payload
         cpf_masked = refresh_payload.get("cpf_masked", [])
-        records = _load_query_records(filters)
+        records = _filter_records_by_cpf(_load_query_records(filters), cpf)
     return _build_search_payload(filters, records, cpf_masked, period_bounds, rebusca_info)
 
 
@@ -693,15 +767,15 @@ async def summary(
     municipio: str | None = Query(None),
     tipo: str = Query("todos"),
     rebusca: bool = Query(False),
-    cpf: str | None = Query(None, description="CPF (11 digitos) para busca de folha federal"),
+    cpf: str | None = Query(None, description="CPF (11 digitos) para filtro local e rebusca FACTO/Portal"),
     data_inicio: str | None = Query(None, description="YYYY-MM-DD"),
     data_fim: str | None = Query(None, description="YYYY-MM-DD"),
 ) -> dict[str, Any]:
     filters = _normalize_search_filters(nome, uf, municipio, tipo)
     period_bounds = _resolve_period_bounds(data_inicio, data_fim)
-    records = _load_query_records(filters)
+    records = _filter_records_by_cpf(_load_query_records(filters), cpf)
 
-    cpf_masked: list[str] = []
+    cpf_masked: list[str] = [_mask_cpf(digits) for digits in [_normalize_cpf_digits(cpf)] if digits]
     if rebusca:
         refresh_payload = _run_query_refresh(
             nome=nome,
@@ -713,7 +787,7 @@ async def summary(
             include_federal=True,
         )
         cpf_masked = refresh_payload.get("cpf_masked", [])
-        records = _load_query_records(filters)
+        records = _filter_records_by_cpf(_load_query_records(filters), cpf)
 
     records = _dedup_records(records)
     records.sort(key=_record_sort_key, reverse=True)

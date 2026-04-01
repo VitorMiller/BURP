@@ -13,7 +13,7 @@ from burp.storage import list_sources, search_records
 
 
 def cmd_ingest(args: argparse.Namespace) -> None:
-    result = run_ingest(targets=args.target or ["all"], facto_nome=args.facto_nome)
+    result = run_ingest(targets=args.target or ["all"], facto_nome=args.facto_nome, facto_cpf=args.facto_cpf)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
@@ -70,6 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Target source (federal, fapes, facto)",
     )
     ingest.add_argument("--facto-nome", default=None, help="Name filter for FACTO")
+    ingest.add_argument("--facto-cpf", default=None, help="CPF filter for FACTO")
     ingest.set_defaults(func=cmd_ingest)
 
     search = sub.add_parser("search", help="Search by name")
