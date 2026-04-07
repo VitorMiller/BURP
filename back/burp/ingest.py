@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from burp.connectors.base import IngestResult
 from burp.connectors.facto import ingest_facto
+from burp.connectors.fest import ingest_fest
 from burp.connectors.fapes import ingest_fapes
 from burp.connectors.portal_federal import ingest_portal_federal
 from burp.connectors.sources import list_sources_meta
@@ -13,6 +14,7 @@ TARGETS = {
     "federal": "portal_federal_remuneracao",
     "fapes": "fapes_bolsas",
     "facto": "facto_conveniar",
+    "fest": "fest_conveniar",
 }
 
 
@@ -20,6 +22,8 @@ def run_ingest(
     targets: list[str] | None = None,
     facto_nome: str | None = None,
     facto_cpf: str | None = None,
+    fest_nome: str | None = None,
+    fest_cpf: str | None = None,
 ) -> dict:
     init_db()
     ensure_sources([meta.__dict__ for meta in list_sources_meta()])
@@ -36,6 +40,8 @@ def run_ingest(
         results.append(ingest_fapes())
     if wants("facto"):
         results.append(ingest_facto(facto_nome, cpf=facto_cpf))
+    if wants("fest"):
+        results.append(ingest_fest(fest_nome, cpf=fest_cpf))
 
     clusters = build_clusters()
     refresh_clusters(clusters)

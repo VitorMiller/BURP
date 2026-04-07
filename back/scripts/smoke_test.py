@@ -124,6 +124,32 @@ def _fixture_records() -> list[dict[str, object]]:
         },
         {
             **common,
+            "source_id": "fest_conveniar",
+            "raw_id": None,
+            "orgao": "FEST",
+            "tipo_recebimento": "BOLSA",
+            "competencia": "2025-03",
+            "data_pagamento": "2025-03-11",
+            "valor_bruto": 1500.0,
+            "descontos": None,
+            "valor_liquido": 1500.0,
+            "cargo_funcao": "Pagamento de Bolsa Pesquisa",
+            "detalhes_json": {
+                "categoria": "pessoas_fisicas",
+                "periodo": "01/03/2025 - 31/03/2025",
+                "raw": {
+                    "CodLancamento": 456,
+                    "NomeConvenio": "Projeto FEST",
+                    "NomeTipoPedido": "Pagamento de Bolsa Pesquisa",
+                    "DataPagamento": "2025-03-11T00:00:00",
+                    "DataCompetencia": "2025-03-01T00:00:00",
+                    "Valor": 1500.0,
+                },
+            },
+            "source_url": "fixture://fest/2025-03",
+        },
+        {
+            **common,
             "source_id": "portal_federal_remuneracao",
             "raw_id": None,
             "orgao": "Instituto Federal do Espírito Santo",
@@ -308,10 +334,54 @@ def _assert_facto_report_dedup() -> None:
         raise AssertionError("FACTO payments with the same CodLancamento should dedupe in reports")
 
 
+def _assert_fest_report_dedup() -> None:
+    record_base = {
+        "source_id": "fest_conveniar",
+        "person_name_original": "MARIA DE TESTE",
+        "person_name_norm": normalize_name("MARIA DE TESTE"),
+        "person_hint_id": "***.123.456-**",
+        "uf": "ES",
+        "municipio": None,
+        "orgao": "FEST",
+        "tipo_recebimento": "BOLSA",
+        "competencia": "2025-03",
+        "data_pagamento": "2025-03-11",
+        "valor_bruto": 1500.0,
+        "descontos": None,
+        "valor_liquido": 1500.0,
+        "cargo_funcao": "Pagamento de Bolsa Pesquisa",
+        "source_url": "fixture://fest/a",
+        "collected_at": now_utc_iso(),
+        "parser_version": "smoke-test",
+        "detalhes_json": {
+            "categoria": "servidores",
+            "periodo": "01/03/2025 - 31/03/2025",
+            "raw": {"CodLancamento": 456, "Valor": 1500.0},
+        },
+    }
+    deduped = api_app_module._dedup_records(
+        [
+            record_base,
+            {
+                **record_base,
+                "source_url": "fixture://fest/b",
+                "detalhes_json": {
+                    "categoria": "pessoas_fisicas",
+                    "periodo": "01/03/2025 - 31/03/2025",
+                    "raw": {"CodLancamento": 456, "Valor": 1500.0},
+                },
+            },
+        ]
+    )
+    if len(deduped) != 1:
+        raise AssertionError("FEST payments with the same CodLancamento should dedupe in reports")
+
+
 def main() -> None:
     _assert_facto_is_bolsa()
     _assert_facto_detail_html_parser()
     _assert_facto_report_dedup()
+    _assert_fest_report_dedup()
     _assert_fapes_resource_selection()
     _assert_fapes_report_dedup()
     init_db()
@@ -319,6 +389,7 @@ def main() -> None:
     insert_records(_fixture_records())
     client = TestClient(app)
     captured_facto_calls: list[tuple[str | None, str | None, str | None, str | None]] = []
+    captured_fest_calls: list[tuple[str | None, str | None, str | None, str | None]] = []
 
     def fake_ingest_facto(nome: str | None, cpf: str | None = None, start_date=None, end_date=None) -> IngestResult:
         captured_facto_calls.append(
@@ -339,6 +410,25 @@ def main() -> None:
 
     api_app_module.ingest_facto = fake_ingest_facto
 
+    def fake_ingest_fest(nome: str | None, cpf: str | None = None, start_date=None, end_date=None) -> IngestResult:
+        captured_fest_calls.append(
+            (
+                nome,
+                cpf,
+                start_date.isoformat() if start_date else None,
+                end_date.isoformat() if end_date else None,
+            )
+        )
+        return IngestResult(
+            source_id="fest_conveniar",
+            status="ok",
+            records=0,
+            raw_files=0,
+            notes="fixture-refresh",
+        )
+
+    api_app_module.ingest_fest = fake_ingest_fest
+
     health = client.get("/health")
     sources = client.get("/sources")
     refresh = client.post(
@@ -350,6 +440,7 @@ def main() -> None:
             "data_fim": "2025-02-28",
             "include_fapes": False,
             "include_facto": True,
+            "include_fest": True,
             "include_federal": False,
         },
     )
@@ -375,13 +466,19 @@ def main() -> None:
         raise AssertionError("sources endpoint returned empty list")
     if captured_facto_calls != [("MARIA DE TESTE", "12312312312", "2025-02-01", "2025-02-28")]:
         raise AssertionError(f"FACTO refresh ignored requested period: {captured_facto_calls}")
+    if captured_fest_calls != [("MARIA DE TESTE", "12312312312", "2025-02-01", "2025-02-28")]:
+        raise AssertionError(f"FEST refresh ignored requested period: {captured_fest_calls}")
     if refresh_payload.get("refresh", {}).get("period") != {"start": "2025-02-01", "end": "2025-02-28"}:
         raise AssertionError("refresh/query should echo the requested period")
+    source_ids = {source.get("source_id") for source in sources_payload.get("sources", [])}
+    if "fest_conveniar" not in source_ids:
+        raise AssertionError("sources endpoint should expose FEST metadata")
     if search_payload.get("rebusca", {}).get("performed"):
         raise AssertionError("search should be read-only by default")
 
     january = next(item for item in search_payload["period_report"]["monthly"] if item["month"] == "2025-01")
     february = next(item for item in search_payload["period_report"]["monthly"] if item["month"] == "2025-02")
+    march = next(item for item in search_payload["period_report"]["monthly"] if item["month"] == "2025-03")
     if not january["estourou_teto"]:
         raise AssertionError("january should exceed the configured ceiling")
     if february["estourou_teto"]:
@@ -392,6 +489,8 @@ def main() -> None:
         raise AssertionError("portal federal salary should use valor_bruto in aggregation")
     if february["totals_by_source"].get("facto_conveniar") != 2000.0:
         raise AssertionError("facto total not captured in period report")
+    if march["totals_by_source"].get("fest_conveniar") != 1500.0:
+        raise AssertionError("fest total not captured in period report")
     if february["totals_by_source"].get("portal_federal_remuneracao") != 44300.0:
         raise AssertionError("portal federal salary should use valor_bruto in monthly totals")
     if search_payload["period_report"].get("calculation_basis") != (

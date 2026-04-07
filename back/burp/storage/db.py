@@ -134,8 +134,8 @@ def init_db() -> None:
         conn.executescript(SCHEMA)
         _ensure_records_columns(conn)
         _backfill_portal_federal_ufs(conn)
-        _backfill_facto_as_bolsa(conn)
-        _purge_legacy_facto_window_summaries(conn)
+        _backfill_conveniar_as_bolsa(conn)
+        _purge_legacy_conveniar_window_summaries(conn)
         _backfill_record_hashes_and_dedupe(conn)
         _ensure_record_hash_constraint(conn)
         conn.commit()
@@ -292,10 +292,14 @@ def _normalized_money(value: Any) -> float | None:
     return round(float(value), 2)
 
 
+def _is_conveniar_source(source_id: Any) -> bool:
+    return str(source_id or "").endswith("_conveniar")
+
+
 def _record_identity_payload(record: dict[str, Any]) -> dict[str, Any]:
     detalhes = _deserialize_details(record.get("detalhes_json"))
     raw = detalhes.get("raw") if isinstance(detalhes, dict) else None
-    if record.get("source_id") == "facto_conveniar" and isinstance(raw, dict):
+    if _is_conveniar_source(record.get("source_id")) and isinstance(raw, dict):
         cod_lancamento = raw.get("CodLancamento") or detalhes.get("cod_lancamento")
         if cod_lancamento is not None:
             return {
@@ -418,12 +422,12 @@ def _backfill_portal_federal_ufs(conn: sqlite3.Connection) -> None:
         conn.executemany("UPDATE records SET uf = ? WHERE record_id = ?", updates)
 
 
-def _backfill_facto_as_bolsa(conn: sqlite3.Connection) -> None:
+def _backfill_conveniar_as_bolsa(conn: sqlite3.Connection) -> None:
     rows = conn.execute(
         """
         SELECT record_id, tipo_recebimento
         FROM records
-        WHERE source_id = 'facto_conveniar'
+        WHERE substr(source_id, -10) = '_conveniar'
           AND (tipo_recebimento IS NULL OR tipo_recebimento != 'BOLSA')
         """
     ).fetchall()
@@ -437,7 +441,7 @@ def _backfill_facto_as_bolsa(conn: sqlite3.Connection) -> None:
             (
                 "BOLSA",
                 current_tipo or "FOLHA",
-                "source_policy:facto_conveniar_is_bolsa",
+                "source_policy:conveniar_is_bolsa",
                 int(row["record_id"]),
             )
         )
@@ -454,17 +458,18 @@ def _backfill_facto_as_bolsa(conn: sqlite3.Connection) -> None:
     )
 
 
-def _purge_legacy_facto_window_summaries(conn: sqlite3.Connection) -> None:
-    conn.execute(
+def _purge_legacy_conveniar_window_summaries(conn: sqlite3.Connection) -> None:
+    cur = conn.execute(
         """
         DELETE FROM records
-        WHERE source_id = 'facto_conveniar'
+        WHERE substr(source_id, -10) = '_conveniar'
           AND (competencia IS NULL OR competencia = '')
           AND (data_pagamento IS NULL OR data_pagamento = '')
           AND json_extract(detalhes_json, '$.raw.CodLancamento') IS NULL
         """
     )
-    _rebuild_records_fts(conn)
+    if cur.rowcount:
+        _rebuild_records_fts(conn)
 
 
 def _backfill_record_hashes_and_dedupe(conn: sqlite3.Connection) -> None:

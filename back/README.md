@@ -1,6 +1,6 @@
 # BURP ES Backend
 
-Backend em FastAPI + SQLite para ingestão e consulta de salários do Portal da Transparência federal e bolsas FAPES/FACTO no recorte do Espírito Santo.
+Backend em FastAPI + SQLite para ingestão e consulta de salários do Portal da Transparência federal e bolsas FAPES/FACTO/FEST no recorte do Espírito Santo.
 
 ## Setup
 
@@ -44,12 +44,12 @@ O retorno inclui `period_report`, com:
 
 ## Atualização explícita das fontes
 
-Busca agora é somente leitura por padrão. Para atualizar Portal federal, FAPES e FACTO sob demanda:
+Busca agora é somente leitura por padrão. Para atualizar Portal federal, FAPES, FACTO e FEST sob demanda:
 
 ```bash
 curl -X POST http://localhost:8000/refresh/query \
   -H "Content-Type: application/json" \
-  -d '{"nome":"JOSE DA SILVA","data_inicio":"2025-01-01","data_fim":"2025-12-31","include_fapes":true,"include_facto":true,"include_federal":true}'
+  -d '{"nome":"JOSE DA SILVA","cpf":"12312312312","data_inicio":"2025-01-01","data_fim":"2025-12-31","include_fapes":true,"include_facto":true,"include_fest":true,"include_federal":true}'
 ```
 
 ## CLI

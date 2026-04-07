@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from burp.analysis import build_period_report, extract_record_month_key, resolve_record_amount
 from burp.connectors.facto import ingest_facto
+from burp.connectors.fest import ingest_fest
 from burp.connectors.fapes import ingest_fapes
 from burp.connectors.portal_federal import (
     ingest_portal_federal_for_cpfs,
@@ -204,6 +205,7 @@ def _build_monthly_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
         "total_value_by_tipo": total_value_by_tipo,
         "total_value_by_source": total_value_by_source,
         "facto_total_value": total_value_by_source.get("facto_conveniar", 0.0),
+        "fest_total_value": total_value_by_source.get("fest_conveniar", 0.0),
         "monthly_totals": totals,
         "month_range": {
             "start": month_range_start,
@@ -280,8 +282,12 @@ def _filter_records_by_cpf(records: list[dict[str, Any]], cpf: str | None) -> li
     return [record for record in records if _record_matches_cpf(record, cpf_digits)]
 
 
-def _is_legacy_facto_window_summary(record: dict[str, Any]) -> bool:
-    if record.get("source_id") != "facto_conveniar":
+def _is_conveniar_source(source_id: Any) -> bool:
+    return str(source_id or "").endswith("_conveniar")
+
+
+def _is_legacy_conveniar_window_summary(record: dict[str, Any]) -> bool:
+    if not _is_conveniar_source(record.get("source_id")):
         return False
     if record.get("competencia") or record.get("data_pagamento"):
         return False
@@ -369,6 +375,29 @@ def _build_match_context(records: list[dict[str, Any]], clusters: list[dict[str,
     }
 
 
+def _resolve_conveniar_period(
+    start_date: date | None,
+    end_date: date | None,
+    configured_start_date: date | None,
+    configured_end_date: date | None,
+    fallback_days: int,
+) -> tuple[date, date]:
+    resolved_start = start_date
+    resolved_end = end_date
+    if resolved_start and not resolved_end:
+        resolved_end = date.today()
+    elif resolved_end and not resolved_start:
+        resolved_start = date(resolved_end.year, 1, 1)
+    elif not resolved_start and not resolved_end:
+        if configured_start_date and configured_end_date:
+            resolved_start = configured_start_date
+            resolved_end = configured_end_date
+        else:
+            resolved_end = date.today()
+            resolved_start = resolved_end - timedelta(days=fallback_days if fallback_days > 0 else 30)
+    return resolved_start, resolved_end
+
+
 def _rebusca_facto(
     names: list[str],
     cpf: str,
@@ -385,19 +414,13 @@ def _rebusca_facto(
             "enabled": False,
             "error": "source_disabled",
         }
-    resolved_start = start_date
-    resolved_end = end_date
-    if resolved_start and not resolved_end:
-        resolved_end = date.today()
-    elif resolved_end and not resolved_start:
-        resolved_start = date(resolved_end.year, 1, 1)
-    elif not resolved_start and not resolved_end:
-        if settings.facto_start_date and settings.facto_end_date:
-            resolved_start = settings.facto_start_date
-            resolved_end = settings.facto_end_date
-        else:
-            resolved_end = date.today()
-            resolved_start = resolved_end - timedelta(days=settings.facto_days)
+    resolved_start, resolved_end = _resolve_conveniar_period(
+        start_date,
+        end_date,
+        settings.facto_start_date,
+        settings.facto_end_date,
+        settings.facto_days,
+    )
 
     results = []
     for name in names:
@@ -408,6 +431,49 @@ def _rebusca_facto(
     return {
         "performed": bool(results),
         "source": "facto_conveniar",
+        "names": names,
+        "results": results,
+        "enabled": True,
+        "period": {
+            "start": resolved_start.isoformat() if resolved_start else None,
+            "end": resolved_end.isoformat() if resolved_end else None,
+        },
+    }
+
+
+def _rebusca_fest(
+    names: list[str],
+    cpf: str,
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> dict[str, Any]:
+    settings = get_settings()
+    if not settings.source_fest_enabled:
+        return {
+            "performed": False,
+            "source": "fest_conveniar",
+            "names": names,
+            "results": [],
+            "enabled": False,
+            "error": "source_disabled",
+        }
+    resolved_start, resolved_end = _resolve_conveniar_period(
+        start_date,
+        end_date,
+        settings.fest_start_date,
+        settings.fest_end_date,
+        settings.fest_days,
+    )
+
+    results = []
+    for name in names:
+        if not name:
+            continue
+        result = ingest_fest(name, cpf=cpf, start_date=resolved_start, end_date=resolved_end)
+        results.append(result.__dict__)
+    return {
+        "performed": bool(results),
+        "source": "fest_conveniar",
         "names": names,
         "results": results,
         "enabled": True,
@@ -502,13 +568,14 @@ def _run_query_refresh(
     data_fim: date | None = None,
     include_fapes: bool = True,
     include_facto: bool = True,
+    include_fest: bool = True,
     include_federal: bool = False,
 ) -> dict[str, Any]:
     cpf_list = _parse_cpfs(cpf)
     cpf_masked = [_mask_cpf(value) for value in cpf_list if _normalize_cpf_digits(value)]
     facto_cpf = next((digits for value in cpf_list if (digits := _normalize_cpf_digits(value))), None)
-    if include_facto and not facto_cpf:
-        raise HTTPException(status_code=422, detail="cpf_is_required_for_facto")
+    if (include_facto or include_fest) and not facto_cpf:
+        raise HTTPException(status_code=422, detail="cpf_is_required_for_facto_or_fest")
     candidate_names: dict[str, str] = {normalize_name(nome): nome}
     existing_records = _filter_records_by_cpf(
         _deserialize_records(search_records(normalize_name(nome), None, "ES", None)),
@@ -532,6 +599,8 @@ def _run_query_refresh(
         payload["fapes"] = _ensure_fapes_ingested(force=True)
     if include_facto:
         payload["facto"] = _rebusca_facto(candidate_list[:3], facto_cpf, data_inicio, data_fim)
+    if include_fest:
+        payload["fest"] = _rebusca_fest(candidate_list[:3], facto_cpf, data_inicio, data_fim)
     if include_federal:
         payload["federal"] = _rebusca_federal(candidate_list[:1], cpf_list, data_inicio, data_fim)
     return payload
@@ -545,7 +614,7 @@ def _deserialize_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 record["detalhes_json"] = json.loads(record["detalhes_json"])
             except json.JSONDecodeError:
                 pass
-        if _is_legacy_facto_window_summary(record):
+        if _is_legacy_conveniar_window_summary(record):
             continue
         parsed.append(record)
     return parsed
@@ -553,7 +622,7 @@ def _deserialize_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _dedup_key(record: dict[str, Any]) -> tuple[Any, ...]:
     source_id = record.get("source_id")
-    if source_id == "facto_conveniar":
+    if _is_conveniar_source(source_id):
         detalhes = record.get("detalhes_json")
         raw = detalhes.get("raw") if isinstance(detalhes, dict) else None
         cod_lancamento = raw.get("CodLancamento") if isinstance(raw, dict) else None
@@ -690,11 +759,21 @@ async def ingest_run(payload: dict = Body(default=None)) -> dict[str, Any]:
     targets = []
     facto_nome = None
     facto_cpf = None
+    fest_nome = None
+    fest_cpf = None
     if payload:
         targets = payload.get("targets") or []
         facto_nome = payload.get("facto_nome")
         facto_cpf = payload.get("facto_cpf")
-    result = run_ingest(targets=targets or ["all"], facto_nome=facto_nome, facto_cpf=facto_cpf)
+        fest_nome = payload.get("fest_nome")
+        fest_cpf = payload.get("fest_cpf")
+    result = run_ingest(
+        targets=targets or ["all"],
+        facto_nome=facto_nome,
+        facto_cpf=facto_cpf,
+        fest_nome=fest_nome,
+        fest_cpf=fest_cpf,
+    )
     return result
 
 
@@ -709,6 +788,7 @@ async def refresh_query(payload: dict = Body(default=None)) -> dict[str, Any]:
     data_fim = period_bounds[1] if period_bounds else None
     include_fapes = bool(payload.get("include_fapes", True))
     include_facto = bool(payload.get("include_facto", True))
+    include_fest = bool(payload.get("include_fest", True))
     include_federal = bool(payload.get("include_federal", False))
     refresh_result = _run_query_refresh(
         nome=nome,
@@ -717,6 +797,7 @@ async def refresh_query(payload: dict = Body(default=None)) -> dict[str, Any]:
         data_fim=data_fim,
         include_fapes=include_fapes,
         include_facto=include_facto,
+        include_fest=include_fest,
         include_federal=include_federal,
     )
     return {
@@ -735,7 +816,7 @@ async def search(
     municipio: str | None = Query(None),
     tipo: str = Query("todos"),
     rebusca: bool = Query(False),
-    cpf: str | None = Query(None, description="CPF (11 digitos) para filtro local e rebusca FACTO/Portal"),
+    cpf: str | None = Query(None, description="CPF (11 digitos) para filtro local e rebusca FACTO/FEST/Portal"),
     data_inicio: str | None = Query(None, description="YYYY-MM-DD"),
     data_fim: str | None = Query(None, description="YYYY-MM-DD"),
 ) -> dict[str, Any]:
@@ -752,6 +833,7 @@ async def search(
             data_fim=period_bounds[1] if period_bounds else None,
             include_fapes=True,
             include_facto=True,
+            include_fest=True,
             include_federal=True,
         )
         rebusca_info = refresh_payload
@@ -767,7 +849,7 @@ async def summary(
     municipio: str | None = Query(None),
     tipo: str = Query("todos"),
     rebusca: bool = Query(False),
-    cpf: str | None = Query(None, description="CPF (11 digitos) para filtro local e rebusca FACTO/Portal"),
+    cpf: str | None = Query(None, description="CPF (11 digitos) para filtro local e rebusca FACTO/FEST/Portal"),
     data_inicio: str | None = Query(None, description="YYYY-MM-DD"),
     data_fim: str | None = Query(None, description="YYYY-MM-DD"),
 ) -> dict[str, Any]:
@@ -784,6 +866,7 @@ async def summary(
             data_fim=period_bounds[1] if period_bounds else None,
             include_fapes=True,
             include_facto=True,
+            include_fest=True,
             include_federal=True,
         )
         cpf_masked = refresh_payload.get("cpf_masked", [])

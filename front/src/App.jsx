@@ -240,6 +240,7 @@ export default function App() {
           data_fim: form.dataFim || null,
           include_fapes: true,
           include_facto: true,
+          include_fest: true,
           include_federal: shouldRefreshFederal,
         }),
       });
@@ -269,15 +270,15 @@ export default function App() {
             <span className="eyebrow">BURP ES</span>
             <h1>Auditoria de teto com salário e bolsas no Espírito Santo.</h1>
             <p>
-              A busca consolida salários do Portal da Transparência federal com bolsas da FAPES e da FACTO e destaca,
-              mês a mês, quando a soma passa do teto de referência configurado no backend.
+              A busca consolida salários do Portal da Transparência federal com bolsas da FAPES, da FACTO e da FEST e
+              destaca, mês a mês, quando a soma passa do teto de referência configurado no backend.
             </p>
           </div>
 
           <div className="hero-card">
             <span>Recorte operacional</span>
             <strong>Espírito Santo</strong>
-            <small>Portal da Transparência federal para salário + FAPES e FACTO para bolsas.</small>
+            <small>Portal da Transparência federal para salário + FAPES, FACTO e FEST para bolsas.</small>
           </div>
         </section>
 
@@ -287,7 +288,7 @@ export default function App() {
               <span className="eyebrow">Consulta</span>
               <h2>Investigar servidor</h2>
             </div>
-            <p>Use a base local para consulta normal e atualize Portal, FAPES e FACTO quando precisar trazer dados novos.</p>
+            <p>Use a base local para consulta normal e atualize Portal, FAPES, FACTO e FEST quando precisar trazer dados novos.</p>
           </div>
 
           <div className="form-grid">
@@ -334,7 +335,7 @@ export default function App() {
                 name="cpf"
                 value={form.cpf}
                 onChange={updateField}
-                placeholder="Obrigatório para atualizar FACTO. Também ajuda a filtrar a busca."
+                placeholder="Obrigatório para atualizar FACTO e FEST. Também ajuda a filtrar a busca."
               />
             </label>
 
@@ -345,11 +346,11 @@ export default function App() {
               {loading ? "Consultando..." : "Consultar base local"}
             </button>
             <button className="button button--secondary" disabled={!canRefresh} onClick={refreshSources}>
-              {refreshing ? "Atualizando..." : "Atualizar Portal + FAPES + FACTO"}
+              {refreshing ? "Atualizando..." : "Atualizar Portal + FAPES + FACTO + FEST"}
             </button>
           </div>
 
-          <p className="small-muted">O refresh da FACTO agora exige CPF válido com 11 dígitos.</p>
+          <p className="small-muted">O refresh da FACTO e da FEST exige CPF válido com 11 dígitos.</p>
 
           {refreshInfo ? (
             <div className="inline-note">

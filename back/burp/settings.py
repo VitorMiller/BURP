@@ -26,6 +26,7 @@ class Settings:
     vitoria_base_url: str
     vilavelha_base_url: str
     facto_base_url: str
+    fest_base_url: str
     federal_base_url: str
     federal_busca_base_url: str
     federal_portal_base_url: str
@@ -43,11 +44,16 @@ class Settings:
     facto_window_days: int
     facto_start_date: date | None
     facto_end_date: date | None
+    fest_days: int
+    fest_window_days: int
+    fest_start_date: date | None
+    fest_end_date: date | None
     source_vitoria_enabled: bool
     source_vilavelha_enabled: bool
     source_ckan_enabled: bool
     source_fapes_enabled: bool
     source_facto_enabled: bool
+    source_fest_enabled: bool
     source_federal_enabled: bool
     diaria_keywords: list[str]
     bolsa_keywords: list[str]
@@ -119,6 +125,7 @@ def get_settings() -> Settings:
         vitoria_base_url=os.getenv("BURP_VITORIA_BASE_URL", "https://wstransparencia.vitoria.es.gov.br"),
         vilavelha_base_url=os.getenv("BURP_VILAVELHA_BASE_URL", "https://wstransparencia.vilavelha.es.gov.br"),
         facto_base_url=os.getenv("BURP_FACTO_BASE_URL", "https://facto.conveniar.com.br/portaltransparencia"),
+        fest_base_url=os.getenv("BURP_FEST_BASE_URL", "https://fest.conveniar.com.br/portaltransparencia"),
         federal_base_url=os.getenv("BURP_FEDERAL_BASE_URL", "https://api.portaldatransparencia.gov.br/api-de-dados"),
         federal_busca_base_url=os.getenv(
             "BURP_FEDERAL_BUSCA_BASE_URL",
@@ -142,11 +149,16 @@ def get_settings() -> Settings:
         facto_window_days=int(os.getenv("BURP_FACTO_WINDOW_DAYS", "0")),
         facto_start_date=_env_date("BURP_FACTO_START_DATE"),
         facto_end_date=_env_date("BURP_FACTO_END_DATE"),
+        fest_days=int(os.getenv("BURP_FEST_DAYS", "30")),
+        fest_window_days=int(os.getenv("BURP_FEST_WINDOW_DAYS", "0")),
+        fest_start_date=_env_date("BURP_FEST_START_DATE"),
+        fest_end_date=_env_date("BURP_FEST_END_DATE"),
         source_vitoria_enabled=_env_bool("BURP_SOURCE_VITORIA_ENABLED", True),
         source_vilavelha_enabled=_env_bool("BURP_SOURCE_VILAVELHA_ENABLED", True),
         source_ckan_enabled=_env_bool("BURP_SOURCE_CKAN_ENABLED", True),
         source_fapes_enabled=_env_bool("BURP_SOURCE_FAPES_ENABLED", True),
         source_facto_enabled=_env_bool("BURP_SOURCE_FACTO_ENABLED", True),
+        source_fest_enabled=_env_bool("BURP_SOURCE_FEST_ENABLED", True),
         source_federal_enabled=_env_bool("BURP_SOURCE_FEDERAL_ENABLED", False),
         diaria_keywords=_env_list("BURP_DIARIA_KEYWORDS"),
         bolsa_keywords=_env_list("BURP_BOLSA_KEYWORDS"),

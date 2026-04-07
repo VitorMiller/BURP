@@ -13,7 +13,13 @@ from burp.storage import list_sources, search_records
 
 
 def cmd_ingest(args: argparse.Namespace) -> None:
-    result = run_ingest(targets=args.target or ["all"], facto_nome=args.facto_nome, facto_cpf=args.facto_cpf)
+    result = run_ingest(
+        targets=args.target or ["all"],
+        facto_nome=args.facto_nome,
+        facto_cpf=args.facto_cpf,
+        fest_nome=args.fest_nome,
+        fest_cpf=args.fest_cpf,
+    )
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
@@ -67,10 +73,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--target",
         action="append",
         default=[],
-        help="Target source (federal, fapes, facto)",
+        help="Target source (federal, fapes, facto, fest)",
     )
     ingest.add_argument("--facto-nome", default=None, help="Name filter for FACTO")
     ingest.add_argument("--facto-cpf", default=None, help="CPF filter for FACTO")
+    ingest.add_argument("--fest-nome", default=None, help="Name filter for FEST")
+    ingest.add_argument("--fest-cpf", default=None, help="CPF filter for FEST")
     ingest.set_defaults(func=cmd_ingest)
 
     search = sub.add_parser("search", help="Search by name")

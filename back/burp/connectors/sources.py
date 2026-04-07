@@ -29,4 +29,10 @@ def list_sources_meta() -> list[SourceMeta]:
             base_url=settings.facto_base_url,
             tipo="BOLSA",
         ),
+        SourceMeta(
+            source_id="fest_conveniar",
+            name="FEST - Conveniar (Pessoas Fisicas e Servidores)",
+            base_url=settings.fest_base_url,
+            tipo="BOLSA",
+        ),
     ]
