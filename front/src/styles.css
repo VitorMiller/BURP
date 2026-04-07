@@ -59,6 +59,14 @@ select {
   padding: 2rem 0 4rem;
 }
 
+.no-print {
+  display: block;
+}
+
+.print-only {
+  display: none;
+}
+
 .hero,
 .panel,
 .summary-card,
@@ -252,6 +260,11 @@ select:focus {
   gap: 0.9rem;
 }
 
+.report-shell {
+  display: grid;
+  gap: 1.25rem;
+}
+
 .sources-grid {
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
 }
@@ -278,7 +291,6 @@ select:focus {
 
 .summary-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  margin-bottom: 1.25rem;
 }
 
 .summary-card {
@@ -411,6 +423,45 @@ select:focus {
   margin-bottom: 0.6rem;
 }
 
+.report-export {
+  margin-bottom: 0;
+}
+
+.report-print-header {
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid rgba(17, 33, 45, 0.14);
+}
+
+.report-print-header h2 {
+  margin: 0.3rem 0 0.65rem;
+  font-size: 2rem;
+  line-height: 1;
+}
+
+.report-print-header p {
+  margin: 0;
+}
+
+.report-print-meta {
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-top: 1rem;
+}
+
+.report-print-meta div {
+  padding: 0.85rem 0.95rem;
+  border: 1px solid rgba(17, 33, 45, 0.1);
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.report-print-meta strong {
+  display: block;
+  margin-top: 0.35rem;
+  font-size: 1rem;
+}
+
 @keyframes rise {
   from {
     opacity: 0;
@@ -426,7 +477,8 @@ select:focus {
   .hero,
   .two-column,
   .summary-grid,
-  .form-grid {
+  .form-grid,
+  .report-print-meta {
     grid-template-columns: 1fr;
   }
 
@@ -441,5 +493,86 @@ select:focus {
 
   .month-row__flag {
     text-align: left;
+  }
+}
+
+@media print {
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
+
+  body {
+    background: #fff;
+    color: #111;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .print-only {
+    display: block !important;
+  }
+
+  .shell,
+  .layout {
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 0;
+    overflow: visible;
+  }
+
+  .report-shell {
+    gap: 0.8rem;
+  }
+
+  .panel,
+  .summary-card,
+  .cluster-card,
+  .source-pill,
+  .month-row {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    box-shadow: none;
+    backdrop-filter: none;
+    background: #fff;
+    border: 1px solid #d7d7d7;
+  }
+
+  .panel__header {
+    margin-bottom: 0.75rem;
+  }
+
+  .hero-card,
+  .summary-card--dark,
+  .summary-card--alert,
+  .summary-card--good,
+  .summary-card--warm,
+  .month-row--alert {
+    color: inherit;
+    background: #fff;
+  }
+
+  .summary-grid {
+    gap: 0.55rem;
+  }
+
+  .summary-card {
+    min-height: auto;
+  }
+
+  .month-list,
+  .cluster-list {
+    gap: 0.65rem;
+  }
+
+  .month-row__alert {
+    color: #8d2f20;
+  }
+
+  .report-print-meta div {
+    background: #fff;
   }
 }

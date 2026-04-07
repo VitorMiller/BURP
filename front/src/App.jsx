@@ -18,6 +18,26 @@ function startOfYearIso() {
   return `${now.getFullYear()}-01-01`;
 }
 
+function formatDateLabel(value) {
+  if (!value) {
+    return "n/d";
+  }
+  const [year, month, day] = String(value).split("-");
+  if (!year || !month || !day) {
+    return String(value);
+  }
+  return `${day}/${month}/${year}`;
+}
+
+function slugifyFilePart(value) {
+  return String(value || "consulta")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase();
+}
+
 function buildQuery(params) {
   const query = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
@@ -154,6 +174,33 @@ export default function App() {
     }
     return Object.entries(summary.by_source).slice(0, 4);
   }, [summary]);
+  const reportPeriod = result?.period_report?.period;
+  const reportGeneratedAt = useMemo(() => {
+    if (!result) {
+      return "";
+    }
+    return new Intl.DateTimeFormat("pt-BR", {
+      dateStyle: "short",
+      timeStyle: "short",
+    }).format(new Date());
+  }, [result]);
+
+  function exportReportPdf() {
+    if (!result || typeof window === "undefined") {
+      return;
+    }
+    const originalTitle = document.title;
+    const reportName = result.query?.nome || form.nome || "consulta";
+    const reportStart = reportPeriod?.start || form.dataInicio || "inicio";
+    const reportEnd = reportPeriod?.end || form.dataFim || "fim";
+    const restoreTitle = () => {
+      document.title = originalTitle;
+    };
+    document.title = `burp-${slugifyFilePart(reportName)}-${reportStart}-${reportEnd}`;
+    window.addEventListener("afterprint", restoreTitle, { once: true });
+    window.print();
+    window.setTimeout(restoreTitle, 1000);
+  }
 
   async function runSearch() {
     setLoading(true);
@@ -214,10 +261,10 @@ export default function App() {
 
   return (
     <div className="shell">
-      <div className="backdrop" />
+      <div className="backdrop no-print" />
 
       <main className="layout">
-        <section className="hero">
+        <section className="hero no-print">
           <div>
             <span className="eyebrow">BURP ES</span>
             <h1>Auditoria de teto com salário e bolsas no Espírito Santo.</h1>
@@ -234,7 +281,7 @@ export default function App() {
           </div>
         </section>
 
-        <section className="panel search-panel">
+        <section className="panel search-panel no-print">
           <div className="panel__header">
             <div>
               <span className="eyebrow">Consulta</span>
@@ -316,7 +363,7 @@ export default function App() {
           {error ? <div className="error-box">{error}</div> : null}
         </section>
 
-        <section className="panel">
+        <section className="panel no-print">
           <div className="panel__header">
             <div>
               <span className="eyebrow">Fontes</span>
@@ -333,7 +380,38 @@ export default function App() {
         </section>
 
         {result ? (
-          <>
+          <div className="report-shell">
+            <section className="report-print-header print-only">
+              <span className="eyebrow">BURP ES</span>
+              <h2>Relatório consolidado de teto</h2>
+              <p>
+                Consulta: <strong>{result.query?.nome || form.nome}</strong>
+              </p>
+              <div className="report-print-meta">
+                <div>
+                  <span>Período</span>
+                  <strong>
+                    {formatDateLabel(reportPeriod?.start || form.dataInicio)} até{" "}
+                    {formatDateLabel(reportPeriod?.end || form.dataFim)}
+                  </strong>
+                </div>
+                <div>
+                  <span>CPF</span>
+                  <strong>{result.query?.cpf_masked?.[0] || "Não informado"}</strong>
+                </div>
+                <div>
+                  <span>UF e tipo</span>
+                  <strong>
+                    {result.query?.uf || form.uf} • {result.query?.tipo_norm || form.tipo}
+                  </strong>
+                </div>
+                <div>
+                  <span>Gerado em</span>
+                  <strong>{reportGeneratedAt}</strong>
+                </div>
+              </div>
+            </section>
+
             <section className="summary-grid">
               <SummaryCard
                 label="Total no período"
@@ -442,7 +520,23 @@ export default function App() {
                 ))}
               </div>
             </section>
-          </>
+
+            <section className="panel report-export no-print">
+              <div className="panel__header">
+                <div>
+                  <span className="eyebrow">Exportação</span>
+                  <h2>Salvar esta consulta em PDF</h2>
+                </div>
+                <p>O navegador abrirá a visualização de impressão já preparada para gerar um PDF limpo do relatório.</p>
+              </div>
+
+              <div className="actions">
+                <button className="button button--primary" onClick={exportReportPdf}>
+                  Exportar consulta em PDF
+                </button>
+              </div>
+            </section>
+          </div>
         ) : null}
       </main>
     </div>
